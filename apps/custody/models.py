@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 # 🌟 استيراد موديل الهيكل الجديد، وحذف استيرادات الأقسام والقطاعات القديمة من هنا
 from apps.organization.models import Branch, BranchStructure 
 
-# 1️⃣ جدول الموظفين المحدث
+
 class Employee(models.Model):
     employee_code = models.CharField(
         max_length=50, 
@@ -14,7 +14,7 @@ class Employee(models.Model):
     name_ar = models.CharField(max_length=255, verbose_name="Name (Arabic)")
     name_en = models.CharField(max_length=255, blank=True, null=True, verbose_name="Name (English)")
     
-    # 🌟 الحقل الجديد: البريد الإلكتروني للموظف
+    
     email = models.EmailField(
         max_length=255, 
         unique=True, 
@@ -23,8 +23,7 @@ class Employee(models.Model):
         verbose_name="Email Address"
     )
     
-    # 🌟 التعديل الجوهري: ربط الموظف بالهيكل الإداري الموحد الجديد (فرع + قطاع + إدارة)
-    # تم إلغاء حقول sector و department المباشرة لتجنب التكرار والـ Denormalization
+    
     branch_structure = models.ForeignKey(
         "organization.BranchStructure", 
         on_delete=models.PROTECT,  # حماية الموظف من حذف الهيكل الإداري بالخطأ
@@ -45,7 +44,7 @@ class Employee(models.Model):
         return f"{self.employee_code} - {self.name_ar}"
 
 
-# 2️⃣ جدول العهدة (بدون تغييرات هيكلية بناءً على رغبتك في إبقاء الحقل في الموظف فقط)
+
 class ConsumerCustody(models.Model):
     ACTION_CHOICES = [
         ('issue', 'صرف عهدة'),
@@ -54,12 +53,23 @@ class ConsumerCustody(models.Model):
 
     asset = models.ForeignKey(BaseAsset, on_delete=models.CASCADE, related_name='custody_history')
     
-    # الربط التلقائي يعتمد على الـ employee_code كـ Foreign Key
+    
     employee = models.ForeignKey(
         Employee, 
-        on_delete=models.CASCADE, 
-        db_column='employee_id', # للتأكيد والمطابقة مع الـ SQL
+        on_delete=models.CASCADE,
+        blank=True, 
+        null=True, 
+        db_column='employee_id', 
         related_name='custodies'
+    )
+    
+    branch_structure = models.ForeignKey(
+        BranchStructure, 
+        on_delete=models.PROTECT, 
+        blank=True, 
+        null=True, 
+        related_name="structure_custodies",
+        verbose_name="Assigned to Branch/Sector/Department"
     )
     
     action_type = models.CharField(max_length=10, choices=ACTION_CHOICES)
@@ -67,12 +77,24 @@ class ConsumerCustody(models.Model):
     return_date = models.DateField(blank=True, null=True, verbose_name="Return Date")
     notes = models.TextField(blank=True, null=True)
     
-    assigned_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    assigned_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # 🔒 حماية برمجية (Validation): لضمان أن العهدة تذهب إما لموظف أو لهيكل إداري وليس فارغاً تماماً
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if not self.employee and not self.branch_structure:
+            raise ValidationError("You should assign any asset to Employee or branch ")
+        if self.employee and self.branch_structure:
+            raise ValidationError("you should assign to one of emp or branch")
+        
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     class Meta:
-        db_table = 'custody_consumercustody'  # لضمان مطابقة اسم الجدول في قاعدة البيانات
+        db_table = 'custody_consumercustody'  
 
     def __str__(self):
         return f"Custody {self.asset} -> {self.employee}"

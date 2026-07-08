@@ -390,15 +390,11 @@ from django.db.models import Q
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-# تأكد من أن الموديل مستورد بشكل صحيح في أعلى الملف
+
 
 @api_view(['GET'])
 def get_in_stock_assets_by_category(request):
-    """
-    جلب كافة الأصول المتوفرة في المخزن (status='in_stock') بناءً على اسم التصنيف في الـ URL.
-    متوافق تماماً مع بنية الموديل وخيارات الـ select_related المتاحة.
-    الرابط: /api/custody/assets/in-stock/?category=pc
-    """
+    
     category_name = request.query_params.get('category', None)
     
     if not category_name:
@@ -408,7 +404,7 @@ def get_in_stock_assets_by_category(request):
         )
 
     try:
-        # 🌟 التصحيح: استخدام الخيارات المتاحة فعلياً في قاعدة بياناتك لعمل الـ JOIN
+        
         assets = BaseAsset.objects.select_related(
             'category', 
             'computerasset'
@@ -423,7 +419,7 @@ def get_in_stock_assets_by_category(request):
         for asset in assets:
             cat = asset.category
             
-            # بناء كائن بيانات الأصل الأساسي بدون استدعاء حقول غير موجودة تسبب كراش
+            
             asset_data = {
                 "id": asset.id,
                 "serial_number": getattr(asset, 'serial_number', None),
@@ -437,9 +433,9 @@ def get_in_stock_assets_by_category(request):
                 }
             }
 
-            # 💻 الفحص الديناميكي: لو التصنيف حاسوب، نصل للمواصفات عبر الحقل العكسي الصحيح 'computerasset'
+           
             if cat and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
-                # 🌟 استخدام الحقل المكتشف في الـ Choices الخاص بك
+                
                 comp_specs = getattr(asset, 'computerasset', None)
                 
                 if comp_specs:
@@ -448,7 +444,7 @@ def get_in_stock_assets_by_category(request):
                         "ram": getattr(comp_specs, 'ram', None),
                         "storage": getattr(comp_specs, 'storage', None),
                         "os": getattr(comp_specs, 'os', None),
-                        # أضف أي حقول مواصفات أخرى موجودة في جدول الـ computerasset لديك
+                        
                     }
                 else:
                     asset_data["specs"] = "No hardware specs recorded for this computer"

@@ -51,8 +51,8 @@ class BranchStructure(models.Model):
     
     id = models.BigAutoField(db_column='structure_id', primary_key=True)
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="structures")
-    sector = models.ForeignKey(Sector, on_delete=models.CASCADE, related_name="structures")
-    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="structures")
+    sector = models.ForeignKey(Sector, on_delete=models.CASCADE, related_name="structures",blank=True,null=True)
+    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="structures",blank=True,null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

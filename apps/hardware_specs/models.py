@@ -49,10 +49,7 @@ class AssetCategory(models.Model):
 
 
 class BaseAsset(models.Model):
-    """
-    الموديل الرئيسي لجميع الأجهزة الفردية بالسيريال نمبر.
-    سواء كانت عهدة موظف (Assigned) أو متواجدة حالياً كجهاز راكد بالمخزن (In Stock).
-    """
+    
     STATUS_CHOICES = [
         ("in_stock", "In Inventory / Stock (بالمخزن وغير معين لمستهلك)"),
         ("assigned", "Assigned to Consumer (صُرف كعهدة لموظف أو موقع)"),
@@ -67,10 +64,7 @@ class BaseAsset(models.Model):
         max_length=20, choices=STATUS_CHOICES, default="in_stock"
     )
 
-    # 🌟 تم تنظيف وحذف حقول الموقع القديمة وحقول أسماء المستهلكين النصية نهائياً من هنا
-    # لأن مكان وموقع الأصل يتحدد الآن ديناميكياً من الموظف المستلم للعهدة في جدول العهد
-
-    # المواصفات المصنعية الثابتة للجهاز
+    
     brand = models.CharField(max_length=100, db_index=True)
     model_or_pn = models.CharField(
         max_length=150, blank=True, null=True, verbose_name="Model / Part No."
@@ -93,9 +87,6 @@ class BaseAsset(models.Model):
         return f"[{self.category.name_en}] {self.brand} - S/N: {self.serial_number} ({self.get_status_display()})"
 
 
-# --------------------------------------------------
-# الموديلات الفرعية المورثة التي تحتاج مواصفات تقنية خاصة
-# --------------------------------------------------
 
 class ComputerAsset(BaseAsset):
     """مواصفات الحواسب الشاملة بالإضافة إلى الملحقات الشخصية وحقائب الظهر التابعة لها مباشرة"""
@@ -129,7 +120,7 @@ class ComputerAsset(BaseAsset):
 
 
 class PrinterAsset(BaseAsset):
-    """مواصفات الطابعات المتواجدة في المكاتب أو في مخزن تقنية المعلومات"""
+    
 
     multifunctions = models.CharField(max_length=100, blank=True, null=True, verbose_name="Multifunctions (e.g., All In One)")
     printer_type = models.CharField(max_length=100, blank=True, null=True, verbose_name="Printer Type (e.g., Color/Mono)")
@@ -153,7 +144,6 @@ class PrinterAsset(BaseAsset):
 
 
 class MonitorAsset(BaseAsset):
-    """مواصفات الشاشات وتلفزيونات غرف الاجتماعات المستقلة (غير التابعة لجهاز كمبيوتر فردي)"""
 
     part_number = models.CharField(max_length=150, blank=True, null=True, verbose_name="Part No.")
     inches = models.CharField(max_length=50, verbose_name="Screen Size (Inches)")
@@ -184,7 +174,6 @@ class MonitorAsset(BaseAsset):
 
 
 class NetworkDeviceAsset(BaseAsset):
-    """أجهزة الشبكات الحية بالسيرفر أو المخزنة كاحتياط (Spare)"""
     device_type = models.CharField(
         max_length=100, verbose_name="Switch / Router / AP"
     )
@@ -197,8 +186,7 @@ class NetworkDeviceAsset(BaseAsset):
         
 
 class TabletAsset(BaseAsset):
-    """مواصفات الأجهزة اللوحية (Tablets & iPads) المتنقلة"""
-
+    
     device_item_type = models.CharField(max_length=50, verbose_name="Item Type (e.g., Tablet/Ipad)")
     storage_ram = models.CharField(max_length=100, blank=True, null=True, verbose_name="Storage & RAM Specs")
     screen_color_specs = models.CharField(max_length=150, blank=True, null=True, verbose_name="Color & Screen Specs")
