@@ -62,16 +62,28 @@ def inventory_detail_update_delete(request, pk):
 
     elif request.method in ['PUT', 'PATCH']:
         partial = (request.method == 'PATCH')
-        serializer = InventoryAccessoriesStockSerializer(item, data=request.data, partial=partial)
+        
+        # 🛠️ Fix context issue for unique constraints validations during PATCH
+        serializer = InventoryAccessoriesStockSerializer(
+            item, 
+            data=request.data, 
+            partial=partial,
+            context={'request': request} 
+        )
+        
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        # 💻 Debug helper: This will print the exact validation error in your terminal shell
+        print("SERIALIZER VALIDATION ERRORS:", serializer.errors)
+        
+        # Returns the detailed dictionary error to Postman instead of a blank object
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
         item.delete()
-        return Response({"message": "Inventory stock record deleted successfully."}, status=status.HTTP_200_OK)
-    
+        return Response({"message": "Inventory stock record deleted successfully."}, status=status.HTTP_200_OK) 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -162,8 +174,6 @@ def inventory_history_list(request):
     """
     API view to get the complete audit log history of inventory movements.
     """
-    logs = InventoryTransactionLog.objects.all().order_by('-created_at')
+    logs = InventoryTransactionLog.objects.select_related('user', 'inventory_item', 'hardware_asset').all().order_by('-created_at')
     serializer = InventoryTransactionLogSerializer(logs, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
-
-

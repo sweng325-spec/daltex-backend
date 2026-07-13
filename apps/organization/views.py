@@ -168,10 +168,39 @@ def sector_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     elif request.method == 'DELETE':
-        sector.delete()
-        return Response({'message': 'Sector deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        # 📥 Extract the specific branch from query parameters
+        branch_id = request.query_params.get('branch_id')
 
+        if not branch_id:
+            return Response(
+                {'error': 'branch_id query parameter is required to remove this sector from a specific branch.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
+        # 🔍 Find all structural records tying this sector and all its departments to this specific branch
+        linked_structures = BranchStructure.objects.filter(
+            branch_id=branch_id,
+            sector=sector
+        )
+
+        if not linked_structures.exists():
+            return Response(
+                {'error': 'No structural links found matching this specific combination of Branch and Sector.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # ✂️ Count how many mapping rows (departments links) are being removed for reporting
+        deleted_count = linked_structures.count()
+
+        # Wipe out all rows matching this branch + sector combination
+        linked_structures.delete()
+        
+        return Response(
+            {
+                'message': f'Successfully removed this sector and its {deleted_count-1} linked department(s) from the specified branch. The global sector master data remains intact.'
+            }, 
+            status=status.HTTP_200_OK
+        )
 # ==========================================
 # 🗂️ DEPARTMENTS CRUD (Centralized Structure)
 # ==========================================
@@ -239,10 +268,12 @@ def department_detail(request, pk):
     except Department.DoesNotExist:
         return Response({'error': 'Department not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    # 🔹 GET Method: Fetch master department details
     if request.method == 'GET':
         serializer = DepartmentReadSerializer(department)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    # 🔹 PUT Method: Update master department details
     elif request.method == 'PUT':
         serializer = DepartmentSerializer(department, data=request.data)
         if serializer.is_valid():
@@ -250,13 +281,38 @@ def department_detail(request, pk):
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    # 🔹 DELETE Method: Remove structural mapping only
     elif request.method == 'DELETE':
-        # بفضل الـ ON DELETE CASCADE المربوط بـ department_id في جدول branch_structure، 
-        # سيتم حذف سجل الربط تلقائياً من الـ Database عند حذف القسم من هنا ماديّاً!
-        department.delete()
+        # Safely extract ?branch_id=X&sector_id=Y from the URL
+        branch_id = request.query_params.get('branch_id')
+        sector_id = request.query_params.get('sector_id')
+
+        # Validation: Ensure query parameters aren't missing
+        if not branch_id or not sector_id:
+            return Response(
+                {'error': 'Both branch_id and sector_id query parameters are required to remove this structural link.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Look up the specific structure mapping row
+        structure_record = BranchStructure.objects.filter(
+            branch_id=branch_id,
+            sector_id=sector_id,
+            department=department
+        ).first()
+
+        if not structure_record:
+            return Response(
+                {'error': 'No branch structure link found matching this specific combination of Branch, Sector, and Department.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Delete the mapping record, leaving the master Department intact
+        structure_record.delete()
+        
         return Response(
-            {'message': 'Department and its hierarchy links deleted successfully'}, 
-            status=status.HTTP_204_NO_CONTENT
+            {'message': 'The specific branch structure link for this department was deleted successfully.'}, 
+            status=status.HTTP_200_OK
         )
 # =====================================================================
 # 🌟 BRANCH STRUCTURE CRUD (إضافة الدوال الجديدة للهيكل المشترك الموحد)

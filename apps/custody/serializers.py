@@ -14,6 +14,9 @@ class CustodyAssignmentLookupSerializer(serializers.ModelSerializer):
     department_name = serializers.SerializerMethodField()
     structure_id = serializers.SerializerMethodField()
     
+    # القيمة المقروءة لنوع الحركة (مثال: "صيانة" بدلاً من "maintenance")
+    action_type_display = serializers.CharField(source='get_action_type_display', read_only=True)
+    
     # بيانات الأصل (Asset)
     asset_serial = serializers.CharField(source='asset.serial_number', read_only=True)
     asset_brand = serializers.CharField(source='asset.brand', read_only=True)
@@ -28,6 +31,8 @@ class CustodyAssignmentLookupSerializer(serializers.ModelSerializer):
             'asset_serial', 'asset_brand', 'asset_model', 
             'assignment_date', 
             'action_type',
+            'action_type_display',  # حقل العرض المقروء الجديد
+            'reason',               # حقل السبب الجديد المضاف للموديل
             'notes'
         ]
 
@@ -44,7 +49,6 @@ class CustodyAssignmentLookupSerializer(serializers.ModelSerializer):
     def get_branch_name(self, obj):
         struct = self._get_active_structure(obj)
         if struct and struct.branch:
-            # تم تعديل name_an إلى name_en أو الاسم المتاح للتأمين
             return getattr(struct.branch, 'name_en', None) or getattr(struct.branch, 'name', None) or str(struct.branch)
         return None
 

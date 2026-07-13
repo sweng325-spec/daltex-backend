@@ -7,7 +7,11 @@ app_name = 'hardware_specs'
 urlpatterns = [
     # 1️⃣ مسارات الأصول الرئيسية (Base Assets CRUD)
     path('hardware-assets/', views.hardware_asset_list, name='hardware_asset_list'),
-    path('hardware-assets/<int:pk>/', views.hardware_asset_detail, name='hardware_asset_detail'),
+path(
+    'hardware-assets/maintenance/', 
+    views.maintenance_assets_by_category, 
+    name='maintenance-assets-by-category'
+),    path('hardware-assets/<int:pk>/', views.hardware_asset_detail, name='hardware_asset_detail'),
 
     # 2️⃣ مسارات مواصفات الطابعات (Printer Specs CRUD)
     path('printers/', views.printer_list, name='printer_list'),
@@ -39,5 +43,7 @@ urlpatterns = [
     path('monitors/<int:pk>/', views.monitor_detail_update_delete, name='monitor-detail-update-delete'),
 
     path('assets/in-stock/', views.get_in_stock_assets_by_category, name='get_in_stock_assets_by_category'),
+    
+    path('in-stock-count/', views.hardware_asset_instock_count, name='hardware-asset-instock-count'),
 
 ]

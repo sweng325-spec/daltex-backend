@@ -42,6 +42,51 @@ def hardware_asset_list(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+@api_view(['GET'])
+def maintenance_assets_by_category(request):
+    """
+    API view to return all hardware assets with status='maintenance',
+    filtered dynamically by an English category name query parameter.
+    """
+    category_param = request.query_params.get('category')
+
+    if not category_param:
+        return Response(
+            {'error': 'The "category" query parameter is required. Example: ?category=computer'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # 1. 🚀 Query Optimization
+    queryset = BaseAsset.objects.filter(status='maintenance').select_related(
+        'category', 'computerasset', 'printerasset', 'tabletasset', 'monitorasset'
+    ).prefetch_related(
+        'custody_history__employee__branch_structure__branch',
+        'custody_history__employee__branch_structure__sector',
+        'custody_history__employee__branch_structure__department'
+    )
+
+    # 2. 🔍 FIXED LOOKUP: Targeting 'name_en' using double underscores
+    queryset = queryset.filter(category__name_en__iexact=category_param).order_by('-id')
+
+    # 3. Serialize and return
+    serializer = BaseAssetFlatSerializer(queryset, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+def hardware_asset_instock_count(request):
+    """
+    Returns the total number of hardware assets that are currently 'in_stock'.
+    """
+    # Assuming your model field is named 'status'. Change 'in_stock' if your choice value differs.
+    instock_count = BaseAsset.objects.filter(status='in_stock').count()
+    
+    return Response(
+        {
+            "status": "success",
+            "in_stock_count": instock_count
+        }, 
+        status=status.HTTP_200_OK
+    )
 
 @api_view(['GET', 'PUT', 'DELETE'])
 def hardware_asset_detail(request, pk):
@@ -111,6 +156,13 @@ def printer_detail(request, pk):
 # =====================================================================
 # 3. عمليات الأجهزة (Computers CRUD)
 # =====================================================================  
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from apps.hardware_specs.models import AssetCategory
+from .models import ComputerAsset
+from .serializers import ComputerSerializer
+
 @api_view(['GET', 'POST'])
 def computer_list(request):
     if request.method == 'GET':
@@ -119,12 +171,30 @@ def computer_list(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
         
     elif request.method == 'POST':
-        serializer = ComputerSerializer(data=request.data)
+        # Create a mutable copy of request data so we can modify it
+        data = request.data.copy()
+        
+        # Automatically assign the category if it wasn't provided in the body
+        if not data.get('category'):
+            try:
+                # Adjust the lookup filter ('name', 'name_en', or 'slug') based on your AssetCategory fields
+                category_obj, created = AssetCategory.objects.get_or_create(
+                    name_en="Computer", 
+                    defaults={"name_ar": "أجهزة كمبيوتر"}
+                )
+                data['category'] = category_obj.id
+            except Exception as e:
+                return Response(
+                    {"error": f"Failed to automatically resolve 'Computer' AssetCategory: {str(e)}"}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        # Pass the modified data dictionary into your serializer
+        serializer = ComputerSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 @api_view(['GET', 'PUT', 'DELETE'])
 def computer_detail(request, pk):
@@ -293,9 +363,20 @@ def post_new_category(request):
     if not name_en:
         return Response({"error": "The field 'name_en' is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    valid_types = ['accessory', 'base_asset']
+    # Updated to support all dynamic tracking inventory choices
+    valid_types = ['computer', 'spare_part', 'accessory', 'base_asset']
     if category_type not in valid_types:
-        return Response({"error": f"Invalid category_type. Choose from: {valid_types}"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": f"Invalid category_type. Choose from: {valid_types}"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Check if a category with this English name and type already exists to prevent duplicates
+    if AssetCategory.objects.filter(name_en__iexact=name_en, category_type=category_type).exists():
+        return Response(
+            {"error": f"A category with name '{name_en}' and type '{category_type}' already exists."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     category = AssetCategory.objects.create(
         name_en=name_en,
@@ -312,8 +393,8 @@ def post_new_category(request):
             "category_type": category.category_type
         }
     }, status=status.HTTP_201_CREATED)
-
-
+    
+    
 @api_view(['DELETE'])
 def delete_category(request, pk):
     try:

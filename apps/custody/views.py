@@ -3,6 +3,7 @@ from django.utils import timezone
 from django.db.models import Max
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import status
 from apps.hardware_specs.models import BaseAsset
 from .models import ConsumerCustody, Employee
@@ -90,10 +91,10 @@ def add_new_employee(request):
 def unique_employee_list(request):
     """
     API view to fetch all employees from the independent master table 
-    with their consolidated branch and department details.
+    with their consolidated branch, department, and status details.
     """
     try:
-        # 🌟 التعديل هنا: الوصول للعلاقات المبطنة عبر جدول الهيكل الموحد
+        # الوصول للعلاقات المبطنة عبر جدول الهيكل الموحد
         employees = Employee.objects.select_related(
             'branch_structure__branch', 
             'branch_structure__department'
@@ -108,7 +109,8 @@ def unique_employee_list(request):
                 "employee_code": emp.employee_code,
                 "employee_name_ar": emp.name_ar,
                 "employee_name_en": emp.name_en,
-                # 🌟 جلب البيانات من جدول الربط المركزي الموحد
+                "status": emp.status,  # 🌟 تم إضافة حقل الحالة في مصفوفة العرض العام هنا
+                # جلب البيانات من جدول الربط المركزي الموحد
                 "last_known_branch": struct.branch.name_en if struct and struct.branch else None,
                 "last_known_sector": struct.sector.sector_name if struct and struct.sector else None,
                 "last_known_department": struct.department.name if struct and struct.department else None,
@@ -117,16 +119,17 @@ def unique_employee_list(request):
         return Response(employee_list, status=status.HTTP_200_OK)
         
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)@api_view(['GET'])
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     
 @api_view(['GET'])
 def get_employee_by_code(request, employee_code):
     """
     API view to retrieve a single employee's profile by their unique employee_code.
-    Safely handles dynamic branch and department naming fields via the consolidated structure.
+    Safely handles dynamic branch, department, and status naming fields.
     """
     try:
-        # 🌟 استخدام select_related لجلب العلاقات المبطنة من جدول الربط المركزي الموحد
+        # استخدام select_related لجلب العلاقات المبطنة من جدول الربط المركزي الموحد
         employee = Employee.objects.select_related(
             'branch_structure__branch', 
             'branch_structure__department'
@@ -159,7 +162,8 @@ def get_employee_by_code(request, employee_code):
             "employee_code": employee.employee_code,
             "employee_name_ar": employee.name_ar,
             "employee_name_en": employee.name_en,
-            "email": employee.email,  # جلب الإيميل الجديد المضاف في الموديل
+            "email": employee.email,
+            "status": employee.status,  # 🌟 تم إضافة حقل الحالة في الملف الشخصي للموظف هنا
             "last_known_branch": branch_name,
             "last_known_department": department_name,
             "created_at": employee.created_at,
@@ -220,19 +224,23 @@ def delete_employee(request, employee_code):
 def update_employee(request, employee_code):
     """
     API view to update an existing employee's fields.
-    Supports updating personal info and migrating to a new BranchStructure.
+    Supports updating personal info, status, and migrating to a new BranchStructure.
     """
     try:
         # جلب الموظف مع علاقاته الحالية
         employee = Employee.objects.select_related('branch_structure').get(employee_code=employee_code)
         
-        # 1️⃣ تحديث البيانات النصية الشخصية (إذا تم إرسالها)
+        # 1️⃣ تحديث البيانات النصية الشخصية والحالة (إذا تم إرسالها)
         if 'name_ar' in request.data:
             employee.name_ar = request.data['name_ar']
         if 'name_en' in request.data:
             employee.name_en = request.data['name_en']
         if 'email' in request.data:
             employee.email = request.data['email']
+            
+        # 🌟 تم إضافة تحديث حقل الحالة هنا ليعمل مع الـ PATCH من بوستمان
+        if 'status' in request.data:
+            employee.status = request.data['status']
             
         # 2️⃣ التعامل مع تحديثات الهيكل الإداري (Organizational Structure)
         structure_id = request.data.get('structure_id')
@@ -287,6 +295,7 @@ def update_employee(request, employee_code):
                 "name_ar": employee.name_ar,
                 "name_en": employee.name_en,
                 "email": employee.email,
+                "status": employee.status,  # 👈 مضاف لعرض الحالة المحدثة في الـ response ببوستمان
                 "structure_id": struct.id if struct else None,
                 "branch_id": struct.branch_id if struct else None,
                 "sector_id": struct.sector_id if struct else None,
@@ -417,70 +426,203 @@ def assign_asset_to_structure(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+# @api_view(['POST'])
+# def replace_consumer_asset(request):
+#     """
+#     API view to process immediate hardware swap transactions safely.
+#     """
+#     old_serial = request.data.get('old_serial_number')
+#     new_serial = request.data.get('new_serial_number')
+#     notes = request.data.get('notes', 'Swapped via hardware replacement desk.')
+#     it_technician = request.user if request.user.is_authenticated else None
+
+#     if not old_serial or not new_serial:
+#         return Response({"error": "Both old and new serial numbers are mandatory."}, status=status.HTTP_400_BAD_REQUEST)
+
+#     try:
+#         with transaction.atomic():
+#             old_asset = BaseAsset.objects.get(serial_number=old_serial)
+#             new_asset = BaseAsset.objects.get(serial_number=new_serial)
+
+#             if new_asset.status != 'in_stock':
+#                 return Response({"error": f"Target replacement asset {new_serial} is not in stock"}, status=status.HTTP_400_BAD_REQUEST)
+
+#             active_custody = old_asset.custody_history.filter(action_type='issue', return_date__isnull=True).first()
+#             if not active_custody:
+#                 return Response({"error": f"No active custody trace available for asset {old_serial}"}, status=status.HTTP_400_BAD_REQUEST)
+
+#             current_date = timezone.now().date()
+
+#             active_custody.return_date = current_date
+#             active_custody.notes = f"Closed: Swapped with asset S/N: {new_serial}. Details: {notes}"
+#             active_custody.save()
+
+#             ConsumerCustody.objects.create(
+#                 asset=old_asset,
+#                 employee=active_custody.employee,
+#                 action_type='return',
+#                 assignment_date=current_date,
+#                 assigned_by=it_technician,
+#                 notes=request.notes if hasattr(request, 'notes') else f"Returned automatically due to replacement with asset S/N: {new_serial}"
+#             )
+            
+#             old_asset.status = 'maintenance'
+#             old_asset.save()
+
+#             ConsumerCustody.objects.create(
+#                 asset=new_asset,
+#                 employee=active_custody.employee,
+#                 action_type='issue',
+#                 assignment_date=current_date,
+#                 assigned_by=it_technician,
+#                 notes=f"Issued automatically to replace asset S/N: {old_serial}"
+#             )
+
+#             new_asset.status = 'assigned'
+#             new_asset.save()
+
+#         return Response({"message": "Hardware replacement log committed successfully."}, status=status.HTTP_200_OK)
+
+#     except BaseAsset.DoesNotExist:
+#         return Response({"error": "Failed to map requested serial numbers to existing objects."}, status=status.HTTP_404_NOT_FOUND)
+#     except Exception as e:
+#         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+from django.db import transaction
+from django.utils import timezone
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+
+# Explicitly importing from apps.hardware_specs based on your directory structure
+from apps.hardware_specs.models import BaseAsset 
+from .models import ConsumerCustody
+
+from django.db import transaction
+from django.utils import timezone
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.hardware_specs.models import BaseAsset 
+from .models import ConsumerCustody
+
 @api_view(['POST'])
 def replace_consumer_asset(request):
     """
-    API view to process immediate hardware swap transactions safely.
+    API view to process hardware asset movements.
+    - If action_type is 'issue' or 'upgrade': Requires a new serial to perform an immediate hardware swap.
+    - If action_type is 'layoff' or 'retired': Does NOT require a new serial, accepts asset return, 
+      and sets the old asset status directly to 'in_stock'.
     """
     old_serial = request.data.get('old_serial_number')
     new_serial = request.data.get('new_serial_number')
-    notes = request.data.get('notes', 'Swapped via hardware replacement desk.')
+    requested_action = request.data.get('action_type', 'issue') 
+    
+    notes = request.data.get('notes', '')
+    reason_input = request.data.get('reason', 'Hardware replacement / Swap')
     it_technician = request.user if request.user.is_authenticated else None
 
-    if not old_serial or not new_serial:
-        return Response({"error": "Both old and new serial numbers are mandatory."}, status=status.HTTP_400_BAD_REQUEST)
+    # 1. Validation Safeguards
+    if not old_serial:
+        return Response({"error": "The old_serial_number is mandatory."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Determine if this is an offboarding action (layoff or retired)
+    is_offboarding = requested_action in ['layoff', 'retired']
+    
+    # If it is NOT an offboarding action, a new replacement asset is mandatory
+    if not new_serial and not is_offboarding:
+        return Response(
+            {"error": f"A new_serial_number is required for '{requested_action}' transactions."}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     try:
         with transaction.atomic():
+            # Fetch the old asset
             old_asset = BaseAsset.objects.get(serial_number=old_serial)
-            new_asset = BaseAsset.objects.get(serial_number=new_serial)
+            
+            # Fetch the new replacement asset ONLY if it is passed in the payload
+            new_asset = None
+            if new_serial:
+                new_asset = BaseAsset.objects.get(serial_number=new_serial)
+                if new_asset.status != 'in_stock':
+                    return Response({"error": f"Target replacement asset {new_serial} is not in stock"}, status=status.HTTP_400_BAD_REQUEST)
 
-            if new_asset.status != 'in_stock':
-                return Response({"error": f"Target replacement asset {new_serial} is not in stock"}, status=status.HTTP_400_BAD_REQUEST)
-
-            active_custody = old_asset.custody_history.filter(action_type='issue', return_date__isnull=True).first()
+            # Search for the open historical trace (either 'issue' or 'upgrade')
+            active_custody = old_asset.custody_history.filter(
+                action_type__in=['issue', 'upgrade'], 
+                return_date__isnull=True
+            ).first()
+            
             if not active_custody:
                 return Response({"error": f"No active custody trace available for asset {old_serial}"}, status=status.HTTP_400_BAD_REQUEST)
 
             current_date = timezone.now().date()
 
+            # 2. Close out the existing historical custody log
             active_custody.return_date = current_date
-            active_custody.notes = f"Closed: Swapped with asset S/N: {new_serial}. Details: {notes}"
+            swap_msg = f"Swapped with asset S/N: {new_serial}." if new_serial else "Asset collected back completely due to consumer status change."
+            active_custody.notes = f"Closed: {swap_msg} Details: {notes or 'No extra notes provided.'}"
             active_custody.save()
 
+            # 3. Dynamically build clean system audit notes for the 'return' log
+            if requested_action == 'retired':
+                system_notes = "Returned automatically because employee retired."
+            elif requested_action == 'layoff':
+                system_notes = "Returned automatically because employee was laid off."
+            elif requested_action == 'upgrade':
+                system_notes = f"Returned automatically because upgrade to asset S/N: {new_serial}."
+            else:
+                system_notes = f"Returned automatically due to replacement with asset S/N: {new_serial}."
+
+            if notes:
+                system_notes += f" User Notes: {notes}"
+
+            # Create the 'return' movement entry in the tracking history
             ConsumerCustody.objects.create(
                 asset=old_asset,
                 employee=active_custody.employee,
+                branch_structure=active_custody.branch_structure,
                 action_type='return',
                 assignment_date=current_date,
                 assigned_by=it_technician,
-                notes=request.notes if hasattr(request, 'notes') else f"Returned automatically due to replacement with asset S/N: {new_serial}"
+                reason=reason_input,
+                notes=system_notes
             )
             
-            old_asset.status = 'maintenance'
+            # 4. Update the Old Asset Status in base_asset (hardware_assets) table
+            if is_offboarding or requested_action == 'upgrade':
+                old_asset.status = 'in_stock'       # Sends directly back to inventory
+            else:
+                old_asset.status = 'maintenance'    # Standard issued replacements go to maintenance checkups
+                
             old_asset.save()
 
-            ConsumerCustody.objects.create(
-                asset=new_asset,
-                employee=active_custody.employee,
-                action_type='issue',
-                assignment_date=current_date,
-                assigned_by=it_technician,
-                notes=f"Issued automatically to replace asset S/N: {old_serial}"
-            )
+            # 5. Handle issuing the NEW asset ONLY if it was provided in the Postman payload
+            if new_asset:
+                ConsumerCustody.objects.create(
+                    asset=new_asset,
+                    employee=active_custody.employee,
+                    branch_structure=active_custody.branch_structure,
+                    action_type='issue',
+                    assignment_date=current_date,
+                    assigned_by=it_technician,
+                    reason=reason_input,
+                    notes=f"Issued automatically to replace asset S/N: {old_serial}"
+                )
 
-            new_asset.status = 'assigned'
-            new_asset.save()
+                # Set new asset status to assigned
+                new_asset.status = 'assigned'
+                new_asset.save()
 
-        return Response({"message": "Hardware replacement log committed successfully."}, status=status.HTTP_200_OK)
+        # Dynamic return message structure
+        msg = "Asset successfully returned and logged to inventory." if not new_serial else "Hardware replacement log committed successfully."
+        return Response({"message": msg}, status=status.HTTP_200_OK)
 
     except BaseAsset.DoesNotExist:
         return Response({"error": "Failed to map requested serial numbers to existing objects."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR) 
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view
@@ -778,21 +920,224 @@ def get_global_custody_history(request):
         )
         
         
+# @api_view(['GET'])
+# def get_all_active_assignments(request):
+#     """
+#     API view to get all currently assigned hardware assets and the entities holding them.
+#     Filters out returned assets (return_date IS NULL) and supports both employee and direct structural custody.
+#     """
+#     try:
+#         # 🌟 التعديل الجوهري: عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
+#         active_assignments = ConsumerCustody.objects.filter(
+#             action_type='issue',
+#             return_date__isnull=True
+#         ).select_related(
+#             'asset',
+#             'employee__branch_structure',
+#             'branch_structure'  # جلب الهيكل التنظيمي المباشر في حال كانت عهدة مكانية
+#         ).order_by('-assignment_date')
+
+#         data = []
+#         for custody in active_assignments:
+#             emp = custody.employee
+#             asset = custody.asset
+            
+#             # 💡 جلب الهيكل التنظيمي الفعال: إما المباشر من العهدة أو المشتق من الموظف
+#             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
+            
+#             # 🛡️ استخراج اسم الفرع بأمان (Safe Extraction)
+#             branch_name = None
+#             if struct and getattr(struct, 'branch', None):
+#                 branch_name = (
+#                     getattr(struct.branch, 'name_en', None) or 
+#                     getattr(struct.branch, 'branch_name', None) or 
+#                     getattr(struct.branch, 'name', None) or 
+#                     str(struct.branch)
+#                 )
+#             sector_name =None
+#             if struct and getattr(struct, 'sector', None):
+#                 sector_name = (
+#                     getattr(struct.sector, 'sector_name', None) or 
+#                     getattr(struct.sector, 'name', None) or 
+#                     getattr(struct.sector, 'sec_name', None) or 
+#                     str(struct.secor)
+#                 )    
+#             # 🛡️ استخراج اسم القسم بأمان (Safe Extraction)
+#             department_name = None
+#             if struct and getattr(struct, 'department', None):
+#                 department_name = (
+#                     getattr(struct.department, 'name_en', None) or 
+#                     getattr(struct.department, 'department_name', None) or 
+#                     getattr(struct.department, 'name', None) or 
+#                     str(struct.department)
+#                 )
+
+#             data.append({
+#                 "assignment_id": custody.id,
+#                 "assignment_date": custody.assignment_date,
+#                 "notes": custody.notes,
+                
+#                 # إرجاع بيانات الـ Consumer مع ملء بيانات الفرع والقسم ديناميكياً سواء كان هناك موظف أم لا
+#                 "employee": {
+#                     "employee_code": emp.employee_code if emp else None,
+#                     "name_en": emp.name_en if emp else None,
+#                     "name_ar": emp.name_ar if emp else None,
+#                     "branch": branch_name,
+#                     "sector":sector_name,
+#                     "department": department_name,
+#                     "assignment_type": "employee" if emp else "structure"  # الراية دي بتعرف الفرونت إند نوع العهدة فوراً
+#                 },
+                
+#                 "asset": {
+#                     "id": asset.id if asset else None,
+#                     "serial_number": asset.serial_number if asset else None,
+#                     "brand": asset.brand if asset else None,
+#                     "model_or_pn": asset.model_or_pn if asset else None,
+#                     "status": asset.status if asset else None
+#                 }
+#             })
+
+#         return Response(data, status=status.HTTP_200_OK)
+
+#     except Exception as e:
+#         return Response(
+#             {"error": str(e)},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         ) 
+
+# try:
+#     from apps.hardware_specs.models import ComputerAsset
+# except ImportError:
+#     ComputerAsset = None      
+# @api_view(['GET'])
+# def get_all_active_assignments(request):
+#     """
+#     API view to get all currently assigned hardware assets and the entities holding them.
+#     Filters out returned assets (return_date IS NULL) and supports both employee and direct structural custody.
+#     Dynamically fetches MTI subclass fields (like asset_computers) to provide technical specs for granular frontend search.
+#     """
+#     try:
+#         # 🌟 التعديل الجوهري: عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
+#         active_assignments = ConsumerCustody.objects.filter(
+#             action_type='issue',
+#             return_date__isnull=True
+#         ).select_related(
+#             'asset',
+#             'employee__branch_structure',
+#             'branch_structure'  # جلب الهيكل التنظيمي المباشر في حال كانت عهدة مكانية
+#         ).order_by('-assignment_date')
+
+#         data = []
+#         for custody in active_assignments:
+#             emp = custody.employee
+#             asset = custody.asset
+            
+#             # 💡 جلب الهيكل التنظيمي الفعال: إما المباشر من العهدة أو المشتق من الموظف
+#             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
+            
+#             # 🛡️ استخراج اسم الفرع بأمان (Safe Extraction)
+#             branch_name = None
+#             if struct and getattr(struct, 'branch', None):
+#                 branch_name = (
+#                     getattr(struct.branch, 'name_en', None) or 
+#                     getattr(struct.branch, 'branch_name', None) or 
+#                     getattr(struct.branch, 'name', None) or 
+#                     str(struct.branch)
+#                 )
+            
+#             sector_name = None
+#             if struct and getattr(struct, 'sector', None):
+#                 sector_name = (
+#                     getattr(struct.sector, 'sector_name', None) or 
+#                     getattr(struct.sector, 'name', None) or 
+#                     getattr(struct.sector, 'sec_name', None) or 
+#                     str(struct.sector)
+#                 )    
+            
+#             # 🛡️ استخراج اسم القسم بأمان (Safe Extraction)
+#             department_name = None
+#             if struct and getattr(struct, 'department', None):
+#                 department_name = (
+#                     getattr(struct.department, 'name_en', None) or 
+#                     getattr(struct.department, 'department_name', None) or 
+#                     getattr(struct.department, 'name', None) or 
+#                     str(struct.department)
+#                 )
+
+#             # 🛠️ Multi-Table Inheritance: Extract specialized specifications dynamically
+#             asset_specs = {}
+#             if asset:
+#                 try:
+#                     # Check if the asset has a computer subclass link (asset_computer / assetcomputer)
+#                     # Django defaults to the lowercased name of the child model model_name
+#                     comp_subclass = None
+#                     if hasattr(asset, 'assetcomputer'):
+#                         comp_subclass = asset.assetcomputer
+#                     elif hasattr(asset, 'asset_computer'):
+#                         comp_subclass = asset.asset_computer
+                    
+#                     if comp_subclass:
+#                         asset_specs = {
+#                             "pc_type": getattr(comp_subclass, 'pc_type', None),
+#                             "processor": getattr(comp_subclass, 'processor', None),
+#                             "memory_ram": getattr(comp_subclass, 'memory_ram', None),
+#                             "hard_disk": getattr(comp_subclass, 'hard_disk', None),
+#                             "bag_brand": getattr(comp_subclass, 'bag_brand', None),
+#                             "bag_model_or_description": getattr(comp_subclass, 'bag_model_or_description', None) or getattr(comp_subclass, 'bag_model_or_descrp', None),
+#                         }
+#                 except ObjectDoesNotExist:
+#                     # Fallback context safe handling if it's a regular asset rather than a computer subclass
+#                     asset_specs = {}
+
+#             data.append({
+#                 "assignment_id": custody.id,
+#                 "assignment_date": custody.assignment_date,
+#                 "notes": custody.notes,
+                
+#                 # إرجاع بيانات الـ Consumer مع ملء بيانات الفرع والقسم ديناميكياً سواء كان هناك موظف أم لا
+#                 "employee": {
+#                     "employee_code": emp.employee_code if emp else None,
+#                     "name_en": emp.name_en if emp else None,
+#                     "name_ar": emp.name_ar if emp else None,
+#                     "branch": branch_name,
+#                     "sector": sector_name,
+#                     "department": department_name,
+#                     "assignment_type": "employee" if emp else "structure"
+#                 },
+                
+#                 "asset": {
+#                     "id": asset.id if asset else None,
+#                     "serial_number": asset.serial_number if asset else None,
+#                     "brand": asset.brand if asset else None,
+#                     "model_or_pn": asset.model_or_pn if asset else None,
+#                     "status": asset.status if asset else None,
+#                     "specs": asset_specs  # 🌟 Dynamic specs array injected here
+#                 }
+#             })
+
+#         return Response(data, status=status.HTTP_200_OK)
+
+#     except Exception as e:
+#         return Response(
+#             {"error": str(e)},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
 @api_view(['GET'])
 def get_all_active_assignments(request):
     """
     API view to get all currently assigned hardware assets and the entities holding them.
     Filters out returned assets (return_date IS NULL) and supports both employee and direct structural custody.
+    Explicitly joins with ComputerAsset from the hw_spec app to return asset specs.
     """
     try:
-        # 🌟 التعديل الجوهري: عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
+        # 🌟 عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
         active_assignments = ConsumerCustody.objects.filter(
             action_type='issue',
             return_date__isnull=True
         ).select_related(
             'asset',
             'employee__branch_structure',
-            'branch_structure'  # جلب الهيكل التنظيمي المباشر في حال كانت عهدة مكانية
+            'branch_structure'
         ).order_by('-assignment_date')
 
         data = []
@@ -800,10 +1145,10 @@ def get_all_active_assignments(request):
             emp = custody.employee
             asset = custody.asset
             
-            # 💡 جلب الهيكل التنظيمي الفعال: إما المباشر من العهدة أو المشتق من الموظف
+            # 💡 جلب الهيكل التنظيمي الفعال
             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
             
-            # 🛡️ استخراج اسم الفرع بأمان (Safe Extraction)
+            # 🛡️ استخراج اسم الفرع بأمان
             branch_name = None
             if struct and getattr(struct, 'branch', None):
                 branch_name = (
@@ -812,15 +1157,17 @@ def get_all_active_assignments(request):
                     getattr(struct.branch, 'name', None) or 
                     str(struct.branch)
                 )
-            sector_name =None
+            
+            sector_name = None
             if struct and getattr(struct, 'sector', None):
                 sector_name = (
                     getattr(struct.sector, 'sector_name', None) or 
                     getattr(struct.sector, 'name', None) or 
                     getattr(struct.sector, 'sec_name', None) or 
-                    str(struct.secor)
+                    str(struct.sector)
                 )    
-            # 🛡️ استخراج اسم القسم بأمان (Safe Extraction)
+            
+            # 🛡️ استخراج اسم القسم بأمان
             department_name = None
             if struct and getattr(struct, 'department', None):
                 department_name = (
@@ -830,20 +1177,53 @@ def get_all_active_assignments(request):
                     str(struct.department)
                 )
 
+            # 🛠️ Multi-Table Inheritance: Extract specialized specifications from ComputerAsset
+            asset_specs = {}
+            if asset:
+                comp_subclass = None
+                
+                # 1. Standard Django reverse lookup matching lowercased class name
+                if hasattr(asset, 'computerasset'):
+                    try:
+                        comp_subclass = asset.computerasset
+                    except Exception:
+                        pass
+                
+                # 2. Fallback direct db lookup using the base asset link
+                if not comp_subclass:
+                    try:
+                        from apps.hardware_specs.models import ComputerAsset
+                        comp_subclass = ComputerAsset.objects.filter(baseasset_ptr_id=asset.id).first()
+                    except Exception:
+                        pass
+
+                # Populate data fields matching the columns in public.asset_computers
+                if comp_subclass:
+                    asset_specs = {
+                        "pc_type": getattr(comp_subclass, 'pc_type', None),
+                        "processor": getattr(comp_subclass, 'processor', None),
+                        "memory_ram": getattr(comp_subclass, 'memory_ram', None),
+                        "hard_disk": getattr(comp_subclass, 'hard_disk', None),
+                        "bag_brand": getattr(comp_subclass, 'bag_brand', None),
+                        "bag_model_or_description": (
+                            getattr(comp_subclass, 'bag_model_or_description', None) or 
+                            getattr(comp_subclass, 'bag_model_or_descrp', None)
+                        ),
+                    }
+
             data.append({
                 "assignment_id": custody.id,
                 "assignment_date": custody.assignment_date,
                 "notes": custody.notes,
                 
-                # إرجاع بيانات الـ Consumer مع ملء بيانات الفرع والقسم ديناميكياً سواء كان هناك موظف أم لا
                 "employee": {
                     "employee_code": emp.employee_code if emp else None,
                     "name_en": emp.name_en if emp else None,
                     "name_ar": emp.name_ar if emp else None,
                     "branch": branch_name,
-                    "sector":sector_name,
+                    "sector": sector_name,
                     "department": department_name,
-                    "assignment_type": "employee" if emp else "structure"  # الراية دي بتعرف الفرونت إند نوع العهدة فوراً
+                    "assignment_type": "employee" if emp else "structure"
                 },
                 
                 "asset": {
@@ -851,7 +1231,8 @@ def get_all_active_assignments(request):
                     "serial_number": asset.serial_number if asset else None,
                     "brand": asset.brand if asset else None,
                     "model_or_pn": asset.model_or_pn if asset else None,
-                    "status": asset.status if asset else None
+                    "status": asset.status if asset else None,
+                    "specs": asset_specs  # Now fully populated
                 }
             })
 
@@ -861,8 +1242,37 @@ def get_all_active_assignments(request):
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )       
+        )
+        
+        
+@api_view(['GET'])
+def get_assigned_assets_count(request):
+    """
+    API view to return the total number of currently assigned hardware assets.
+    Matches the business logic of active assignments (issued and not yet returned).
+    """
+    try:
+        # 🚀 Extremely fast because it executes a single SELECT COUNT(*) query
+        assigned_count = ConsumerCustody.objects.filter(
+            action_type='issue',
+            return_date__isnull=True
+        ).count()
+
+        return Response(
+            {
+                "status": "success",
+                "assigned_assets_count": assigned_count
+            }, 
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
  
+        
 from django.db.models import Q
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -884,15 +1294,21 @@ def get_assigned_assets_by_category(request):
         )
 
     try:
-        # 🌟 التعديل الأساسي: تحسين الـ JOIN ليشمل الهيكل المباشر وعلاقة مواصفات الحاسوب
+        # Optimized JOIN pattern pulling structural entities alongside category relationships
         active_assignments = ConsumerCustody.objects.filter(
             action_type='issue',
             return_date__isnull=True
         ).select_related(
             'asset__category', 
-            'asset__computerasset',  # جلب المواصفات في خطوة واحدة لو كان كمبيوتر
+            'asset__computerasset',  
             'employee__branch_structure',
-            'branch_structure'       # جلب الهيكل المباشر للعهدة المكانية
+            'branch_structure',
+            'branch_structure__branch',      # Join for explicit branch extraction
+            'branch_structure__sector',      # Join for explicit sector extraction
+            'branch_structure__department',  # Join for explicit department extraction
+            'employee__branch_structure__branch',      # Backup fallback joins for employee's layout
+            'employee__branch_structure__sector',
+            'employee__branch_structure__department'
         ).filter(
             Q(asset__category__name_en__icontains=category_name) | 
             Q(asset__category__name_ar__icontains=category_name)
@@ -904,11 +1320,40 @@ def get_assigned_assets_by_category(request):
             asset = custody.asset
             cat = asset.category if asset else None
             
-            # 💡 جلب الهيكل التنظيمي الفعال (مباشر أو من خلال الموظف) بشكل آمن لمنع الكراش
+            # Resolve the active operational structural tier
             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
 
+            # 🏢 Safe Extraction for Structural Names
+            branch_name = None
+            if struct and getattr(struct, 'branch', None):
+                branch_name = (
+                    getattr(struct.branch, 'name_en', None) or 
+                    getattr(struct.branch, 'branch_name', None) or 
+                    getattr(struct.branch, 'name', None) or 
+                    str(struct.branch)
+                )
+
+            sector_name = None
+            if struct and getattr(struct, 'sector', None):
+                sector_name = (
+                    getattr(struct.sector, 'name_en', None) or 
+                    getattr(struct.sector, 'sector_name', None) or 
+                    getattr(struct.sector, 'name', None) or 
+                    str(struct.sector)
+                )
+
+            department_name = None
+            if struct and getattr(struct, 'department', None):
+                department_name = (
+                    getattr(struct.department, 'name_en', None) or 
+                    getattr(struct.department, 'department_name', None) or 
+                    getattr(struct.department, 'name', None) or 
+                    str(struct.department)
+                )
+
+            # Asset Base Payload Structure
             asset_data = {
-                "id": asset.id if asset else None,
+                "id": asset.id if asset else None,  # 🌟 Dynamic Django primary key (BaseAsset auto-id)
                 "serial_number": asset.serial_number if asset else None,
                 "brand": asset.brand if asset else None,
                 "model_or_pn": asset.model_or_pn if asset else None,
@@ -920,7 +1365,7 @@ def get_assigned_assets_by_category(request):
                 }
             }
 
-            # 💻 جلب مواصفات الحاسوب بشكل آمن وموحد
+            # Handle technical variations for computer/laptop categories
             if cat and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
                 specs_obj = getattr(asset, 'computerasset', None) or getattr(asset, 'specs', None) or getattr(asset, 'computerspecs', None)
                 
@@ -934,16 +1379,24 @@ def get_assigned_assets_by_category(request):
                 else:
                     asset_data["specs"] = "No specs recorded for this computer"
 
+            # Combine elements for unified assignment payload representation
             data.append({
                 "assignment_id": custody.id,
                 "assignment_date": custody.assignment_date,
                 "notes": custody.notes,
+                "asset_id": asset.id if asset else None,  # 🌟 Provided directly at the root layer as requested
+                
                 "employee": {
                     "employee_code": emp.employee_code if emp else None,
                     "name_en": emp.name_en if emp else None,
                     "name_ar": emp.name_ar if emp else None,
                     "structure_id": struct.id if struct else None,
-                    "assignment_type": "employee" if emp else "structure"  # راية توضيحية للفرونت إند
+                    "assignment_type": "employee" if emp else "structure",
+                    
+                    # 🏢 Decoupled Structural Elements
+                    "branch_name": branch_name,
+                    "sector_name": sector_name,
+                    "department_name": department_name
                 },
                 "asset": asset_data
             })
