@@ -1,98 +1,122 @@
 from django.db import transaction
 from django.utils import timezone
-from django.db.models import Max
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
+from django.db.models import Q
 from django.core.exceptions import ObjectDoesNotExist
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework import status
-from apps.hardware_specs.models import BaseAsset
-from .models import ConsumerCustody, Employee
+
 from apps.organization.models import BranchStructure
 from apps.hardware_specs.models import BaseAsset
+from .models import ConsumerCustody
+from .serializers import CustodyAssignmentLookupSerializer
+from apps.custody.models import Employee
 ###########################################################
 ## Custody Management API Views
 ###########################################################
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def add_new_employee(request):
-    """
-    API view to register a new unique employee tied to the consolidated BranchStructure.
-    """
     try:
+        # 🔍 DEBUGGING LINES: Check your terminal when you make the request!
+        print("--- DEBUGGING USER PERMISSIONS ---")
+        print(f"Username: {request.user.username}")
+        print(f"Is Superuser? {request.user.is_superuser}")
+        print(f"Is Staff? {request.user.is_staff}")
+        print(f"Direct Permissions: {request.user.user_permissions.all()}")
+        print(f"Group Permissions: {request.user.get_group_permissions()}")
+        print(f"All Permissions: {request.user.get_all_permissions()}")
+        print(f"Has 'custody.add_employee' permission? {request.user.has_perm('custody.add_employee')}")
+        print("----------------------------------")
+
+        # 🔒 Authorization Check
+        if not request.user.has_perm('custody.add_employee'):
+            return Response(
+                {"error": "You do not have permission to register a new employee."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # ... (rest of your add_new_employee code remains exactly the same) ...
         emp_code = request.data.get('employee_code')
         name_ar = request.data.get('employee_name_ar')
         name_en = request.data.get('employee_name_en')
-        email = request.data.get('email') # استقبال الحقل الجديد المضاف
+        email = request.data.get('email')
         
-        # استقبال معطيات الهيكل الإداري
         branch_id = request.data.get('branch_id')
-        sector_id = request.data.get('sector_id')  # يفضل إرساله من الفرونت إند لضمان دقة التوليفة
+        sector_id = request.data.get('sector_id')
         department_id = request.data.get('department_id')
-        
-        # 🌟 أو استقبال المعرّف المباشر إذا كان الفرونت إند يرسله جاهزاً
         branch_structure_id = request.data.get('branch_structure_id')
 
         if not emp_code or not name_ar:
-            return Response(
-                {"error": "employee_code and employee_name_ar are required fields."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "employee_code and employee_name_ar are required fields."}, status=status.HTTP_400_BAD_REQUEST)
 
         if Employee.objects.filter(employee_code=emp_code).exists():
-            return Response(
-                {"error": f"Employee with code '{emp_code}' already exists."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": f"Employee with code '{emp_code}' already exists."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # تحديد الـ BranchStructure المستهدف للموظف
         structure_obj = None
-        
         if branch_structure_id:
             try:
                 structure_obj = BranchStructure.objects.get(id=branch_structure_id)
             except BranchStructure.DoesNotExist:
                 return Response({"error": "Selected branch_structure_id does not exist."}, status=status.HTTP_400_BAD_REQUEST)
-        
         elif branch_id and department_id:
-            # Automatic combination generation pattern
-            lookup_filters = {
-                'branch_id': branch_id, 
-                'department_id': department_id
-            }
+            lookup_filters = {'branch_id': branch_id, 'department_id': department_id}
             if sector_id:
                 lookup_filters['sector_id'] = sector_id
-                
-            # This looks up the entry, or creates it automatically if missing
             structure_obj, created = BranchStructure.objects.get_or_create(**lookup_filters)
-            if not structure_obj:
-                return Response(
-                    {"error": "The specified organizational structure (Branch/Sector/Department combo) does not exist. Please link them first."}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
 
-        # 🌟 إنشاء الموظف الجديد مع ربطه بالهيكل الصحيح
         new_emp = Employee.objects.create(
             employee_code=emp_code,
             name_ar=name_ar,
             name_en=name_en if name_en else "",
             email=email,
-            branch_structure=structure_obj # إسناد كائن الهيكل الموحد الجديد
+            branch_structure=structure_obj
         )
 
-        return Response({
-            "message": "Employee recorded successfully.",
-            "employee_code": new_emp.employee_code
-        }, status=status.HTTP_201_CREATED)
+        return Response({"message": "Employee recorded successfully.", "employee_code": new_emp.employee_code}, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def unique_employee_list(request):
     """
     API view to fetch all employees from the independent master table 
     with their consolidated branch, department, and status details.
     """
+    # ==================== 🔍 PERMISSION DEBUG TRACE ====================
+    print("\n" + "="*60)
+    print(f"🕵️‍♂️ DEBUGGING PERMISSIONS FOR USER: {request.user.username}")
+    print(f"Active Status: {request.user.is_active}")
+    print(f"Superuser Status: {request.user.is_superuser}")
+    print(f"User Groups: {list(request.user.groups.values_list('name', flat=True))}")
+    
+    # This prints every permission assigned to Jana's account/groups
+    user_perms = list(request.user.get_all_permissions())
+    print(f"All Assigned Permissions: {user_perms}")
+    
+    # Check if 'custody.view_employee' is actually the right label
+    has_custody_perm = request.user.has_perm('custody.view_employee')
+    print(f"Result of has_perm('custody.view_employee'): {has_custody_perm}")
+    print("="*60 + "\n")
+    # ===================================================================
+
+    # 🔒 Authorization Check
+    if not has_custody_perm:
+        return Response(
+            {
+                "error": "You do not have permission to view the employee list.",
+                "debug_info": {
+                    "logged_in_as": request.user.username,
+                    "your_assigned_permissions": user_perms,
+                    "hint": "Check the terminal console where Django is running to see the detailed trace!"
+                }
+            }, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # الوصول للعلاقات المبطنة عبر جدول الهيكل الموحد
         employees = Employee.objects.select_related(
@@ -102,15 +126,13 @@ def unique_employee_list(request):
         
         employee_list = []
         for emp in employees:
-            # التحقق من وجود هيكل تنظيمي مربوط بالموظف لتجنب الـ AttributeError
             struct = emp.branch_structure
             
             employee_list.append({
                 "employee_code": emp.employee_code,
                 "employee_name_ar": emp.name_ar,
                 "employee_name_en": emp.name_en,
-                "status": emp.status,  # 🌟 تم إضافة حقل الحالة في مصفوفة العرض العام هنا
-                # جلب البيانات من جدول الربط المركزي الموحد
+                "status": emp.status,
                 "last_known_branch": struct.branch.name_en if struct and struct.branch else None,
                 "last_known_sector": struct.sector.sector_name if struct and struct.sector else None,
                 "last_known_department": struct.department.name if struct and struct.department else None,
@@ -119,15 +141,24 @@ def unique_employee_list(request):
         return Response(employee_list, status=status.HTTP_200_OK)
         
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    
+        return Response(
+            {"error": str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_employee_by_code(request, employee_code):
     """
     API view to retrieve a single employee's profile by their unique employee_code.
     Safely handles dynamic branch, department, and status naming fields.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_employee'):
+        return Response(
+            {"error": "You do not have permission to view employee details."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # استخدام select_related لجلب العلاقات المبطنة من جدول الربط المركزي الموحد
         employee = Employee.objects.select_related(
@@ -180,12 +211,22 @@ def get_employee_by_code(request, employee_code):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
 def delete_employee(request, employee_code):
     """
     API view to safely delete an employee by their unique code.
     Blocks deletion if the employee holds active asset custody.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.delete_employee'):
+        return Response(
+            {"error": "You do not have permission to delete an employee."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         employee = Employee.objects.get(employee_code=employee_code)
         
@@ -219,13 +260,22 @@ def delete_employee(request, employee_code):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-        
+
+
 @api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
 def update_employee(request, employee_code):
     """
     API view to update an existing employee's fields.
     Supports updating personal info, status, and migrating to a new BranchStructure.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.change_employee'):
+        return Response(
+            {"error": "You do not have permission to update employee details."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # جلب الموظف مع علاقاته الحالية
         employee = Employee.objects.select_related('branch_structure').get(employee_code=employee_code)
@@ -309,14 +359,24 @@ def update_employee(request, employee_code):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
 ############################################################################
 ## Asset Assignment API Views
 ############################################################################
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def assign_asset_custody(request):
     """
     API view to issue an in-stock asset to an employee using their unique code.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.add_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to assign asset custody."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     serial_number = request.data.get('serial_number')
     employee_code = request.data.get('employee_code')
     notes = request.data.get('notes', '')
@@ -354,18 +414,19 @@ def assign_asset_custody(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-from django.db import transaction
-from django.utils import timezone
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from apps.organization.models import BranchStructure  # تأكد من مسار الاستيراد الفعلي لديك
-
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def assign_asset_to_structure(request):
     """
     API view to issue an in-stock asset DIRECTLY to a Branch, Sector, or Department layout.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.add_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to assign asset structure custody."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     serial_number = request.data.get('serial_number')
     structure_id = request.data.get('structure_id')
     notes = request.data.get('notes', '')
@@ -422,87 +483,9 @@ def assign_asset_to_structure(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# @api_view(['POST'])
-# def replace_consumer_asset(request):
-#     """
-#     API view to process immediate hardware swap transactions safely.
-#     """
-#     old_serial = request.data.get('old_serial_number')
-#     new_serial = request.data.get('new_serial_number')
-#     notes = request.data.get('notes', 'Swapped via hardware replacement desk.')
-#     it_technician = request.user if request.user.is_authenticated else None
-
-#     if not old_serial or not new_serial:
-#         return Response({"error": "Both old and new serial numbers are mandatory."}, status=status.HTTP_400_BAD_REQUEST)
-
-#     try:
-#         with transaction.atomic():
-#             old_asset = BaseAsset.objects.get(serial_number=old_serial)
-#             new_asset = BaseAsset.objects.get(serial_number=new_serial)
-
-#             if new_asset.status != 'in_stock':
-#                 return Response({"error": f"Target replacement asset {new_serial} is not in stock"}, status=status.HTTP_400_BAD_REQUEST)
-
-#             active_custody = old_asset.custody_history.filter(action_type='issue', return_date__isnull=True).first()
-#             if not active_custody:
-#                 return Response({"error": f"No active custody trace available for asset {old_serial}"}, status=status.HTTP_400_BAD_REQUEST)
-
-#             current_date = timezone.now().date()
-
-#             active_custody.return_date = current_date
-#             active_custody.notes = f"Closed: Swapped with asset S/N: {new_serial}. Details: {notes}"
-#             active_custody.save()
-
-#             ConsumerCustody.objects.create(
-#                 asset=old_asset,
-#                 employee=active_custody.employee,
-#                 action_type='return',
-#                 assignment_date=current_date,
-#                 assigned_by=it_technician,
-#                 notes=request.notes if hasattr(request, 'notes') else f"Returned automatically due to replacement with asset S/N: {new_serial}"
-#             )
-            
-#             old_asset.status = 'maintenance'
-#             old_asset.save()
-
-#             ConsumerCustody.objects.create(
-#                 asset=new_asset,
-#                 employee=active_custody.employee,
-#                 action_type='issue',
-#                 assignment_date=current_date,
-#                 assigned_by=it_technician,
-#                 notes=f"Issued automatically to replace asset S/N: {old_serial}"
-#             )
-
-#             new_asset.status = 'assigned'
-#             new_asset.save()
-
-#         return Response({"message": "Hardware replacement log committed successfully."}, status=status.HTTP_200_OK)
-
-#     except BaseAsset.DoesNotExist:
-#         return Response({"error": "Failed to map requested serial numbers to existing objects."}, status=status.HTTP_404_NOT_FOUND)
-#     except Exception as e:
-#         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-from django.db import transaction
-from django.utils import timezone
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-
-# Explicitly importing from apps.hardware_specs based on your directory structure
-from apps.hardware_specs.models import BaseAsset 
-from .models import ConsumerCustody
-
-from django.db import transaction
-from django.utils import timezone
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-
-from apps.hardware_specs.models import BaseAsset 
-from .models import ConsumerCustody
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def replace_consumer_asset(request):
     """
     API view to process hardware asset movements.
@@ -510,6 +493,13 @@ def replace_consumer_asset(request):
     - If action_type is 'layoff' or 'retired': Does NOT require a new serial, accepts asset return, 
       and sets the old asset status directly to 'in_stock'.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.change_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to replace or swap custody assets."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     old_serial = request.data.get('old_serial_number')
     new_serial = request.data.get('new_serial_number')
     requested_action = request.data.get('action_type', 'issue') 
@@ -619,18 +609,21 @@ def replace_consumer_asset(request):
         return Response({"error": "Failed to map requested serial numbers to existing objects."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR) 
-from django.db import transaction
-from django.utils import timezone
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-# تأكد من استيراد الموديلات المعتادة (BaseAsset, ConsumerCustody)
+
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def replace_structure_asset(request):
     """
     API view to process immediate hardware swap transactions safely for structural layout custody (Branch/Sector/Department).
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.change_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to replace structural layout assets."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     old_serial = request.data.get('old_serial_number')
     new_serial = request.data.get('new_serial_number')
     notes = request.data.get('notes', 'Swapped via structural hardware replacement desk.')
@@ -703,11 +696,19 @@ def replace_structure_asset(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_asset_history(request, serial_number):
     """
     API view to fetch the tracking log history for a SPECIFIC asset by its serial number.
     Supports both employee personal custody and structural layout assignment seamlessly.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view asset history logs."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # 🌟 التعديل: تصفية الـ select_related لتشمل الـ branch_structure المباشر والـ computerasset للمواصفات
         history = ConsumerCustody.objects.select_related(
@@ -797,14 +798,23 @@ def get_asset_history(request, serial_number):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-        
+
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_global_custody_history(request):
     """
     API view to fetch the complete tracking log history for ALL assets and consumers.
     Optimized performance to handle both employee personal custody and direct structural layouts,
     explicitly including tracking duration timelines.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view global custody history."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # Optimizing with select_related for structural layouts and employees
         global_history = ConsumerCustody.objects.select_related(
@@ -914,217 +924,23 @@ def get_global_custody_history(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-        
-        
-# @api_view(['GET'])
-# def get_all_active_assignments(request):
-#     """
-#     API view to get all currently assigned hardware assets and the entities holding them.
-#     Filters out returned assets (return_date IS NULL) and supports both employee and direct structural custody.
-#     """
-#     try:
-#         # 🌟 التعديل الجوهري: عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
-#         active_assignments = ConsumerCustody.objects.filter(
-#             action_type='issue',
-#             return_date__isnull=True
-#         ).select_related(
-#             'asset',
-#             'employee__branch_structure',
-#             'branch_structure'  # جلب الهيكل التنظيمي المباشر في حال كانت عهدة مكانية
-#         ).order_by('-assignment_date')
 
-#         data = []
-#         for custody in active_assignments:
-#             emp = custody.employee
-#             asset = custody.asset
-            
-#             # 💡 جلب الهيكل التنظيمي الفعال: إما المباشر من العهدة أو المشتق من الموظف
-#             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
-            
-#             # 🛡️ استخراج اسم الفرع بأمان (Safe Extraction)
-#             branch_name = None
-#             if struct and getattr(struct, 'branch', None):
-#                 branch_name = (
-#                     getattr(struct.branch, 'name_en', None) or 
-#                     getattr(struct.branch, 'branch_name', None) or 
-#                     getattr(struct.branch, 'name', None) or 
-#                     str(struct.branch)
-#                 )
-#             sector_name =None
-#             if struct and getattr(struct, 'sector', None):
-#                 sector_name = (
-#                     getattr(struct.sector, 'sector_name', None) or 
-#                     getattr(struct.sector, 'name', None) or 
-#                     getattr(struct.sector, 'sec_name', None) or 
-#                     str(struct.secor)
-#                 )    
-#             # 🛡️ استخراج اسم القسم بأمان (Safe Extraction)
-#             department_name = None
-#             if struct and getattr(struct, 'department', None):
-#                 department_name = (
-#                     getattr(struct.department, 'name_en', None) or 
-#                     getattr(struct.department, 'department_name', None) or 
-#                     getattr(struct.department, 'name', None) or 
-#                     str(struct.department)
-#                 )
 
-#             data.append({
-#                 "assignment_id": custody.id,
-#                 "assignment_date": custody.assignment_date,
-#                 "notes": custody.notes,
-                
-#                 # إرجاع بيانات الـ Consumer مع ملء بيانات الفرع والقسم ديناميكياً سواء كان هناك موظف أم لا
-#                 "employee": {
-#                     "employee_code": emp.employee_code if emp else None,
-#                     "name_en": emp.name_en if emp else None,
-#                     "name_ar": emp.name_ar if emp else None,
-#                     "branch": branch_name,
-#                     "sector":sector_name,
-#                     "department": department_name,
-#                     "assignment_type": "employee" if emp else "structure"  # الراية دي بتعرف الفرونت إند نوع العهدة فوراً
-#                 },
-                
-#                 "asset": {
-#                     "id": asset.id if asset else None,
-#                     "serial_number": asset.serial_number if asset else None,
-#                     "brand": asset.brand if asset else None,
-#                     "model_or_pn": asset.model_or_pn if asset else None,
-#                     "status": asset.status if asset else None
-#                 }
-#             })
-
-#         return Response(data, status=status.HTTP_200_OK)
-
-#     except Exception as e:
-#         return Response(
-#             {"error": str(e)},
-#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#         ) 
-
-# try:
-#     from apps.hardware_specs.models import ComputerAsset
-# except ImportError:
-#     ComputerAsset = None      
-# @api_view(['GET'])
-# def get_all_active_assignments(request):
-#     """
-#     API view to get all currently assigned hardware assets and the entities holding them.
-#     Filters out returned assets (return_date IS NULL) and supports both employee and direct structural custody.
-#     Dynamically fetches MTI subclass fields (like asset_computers) to provide technical specs for granular frontend search.
-#     """
-#     try:
-#         # 🌟 التعديل الجوهري: عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
-#         active_assignments = ConsumerCustody.objects.filter(
-#             action_type='issue',
-#             return_date__isnull=True
-#         ).select_related(
-#             'asset',
-#             'employee__branch_structure',
-#             'branch_structure'  # جلب الهيكل التنظيمي المباشر في حال كانت عهدة مكانية
-#         ).order_by('-assignment_date')
-
-#         data = []
-#         for custody in active_assignments:
-#             emp = custody.employee
-#             asset = custody.asset
-            
-#             # 💡 جلب الهيكل التنظيمي الفعال: إما المباشر من العهدة أو المشتق من الموظف
-#             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
-            
-#             # 🛡️ استخراج اسم الفرع بأمان (Safe Extraction)
-#             branch_name = None
-#             if struct and getattr(struct, 'branch', None):
-#                 branch_name = (
-#                     getattr(struct.branch, 'name_en', None) or 
-#                     getattr(struct.branch, 'branch_name', None) or 
-#                     getattr(struct.branch, 'name', None) or 
-#                     str(struct.branch)
-#                 )
-            
-#             sector_name = None
-#             if struct and getattr(struct, 'sector', None):
-#                 sector_name = (
-#                     getattr(struct.sector, 'sector_name', None) or 
-#                     getattr(struct.sector, 'name', None) or 
-#                     getattr(struct.sector, 'sec_name', None) or 
-#                     str(struct.sector)
-#                 )    
-            
-#             # 🛡️ استخراج اسم القسم بأمان (Safe Extraction)
-#             department_name = None
-#             if struct and getattr(struct, 'department', None):
-#                 department_name = (
-#                     getattr(struct.department, 'name_en', None) or 
-#                     getattr(struct.department, 'department_name', None) or 
-#                     getattr(struct.department, 'name', None) or 
-#                     str(struct.department)
-#                 )
-
-#             # 🛠️ Multi-Table Inheritance: Extract specialized specifications dynamically
-#             asset_specs = {}
-#             if asset:
-#                 try:
-#                     # Check if the asset has a computer subclass link (asset_computer / assetcomputer)
-#                     # Django defaults to the lowercased name of the child model model_name
-#                     comp_subclass = None
-#                     if hasattr(asset, 'assetcomputer'):
-#                         comp_subclass = asset.assetcomputer
-#                     elif hasattr(asset, 'asset_computer'):
-#                         comp_subclass = asset.asset_computer
-                    
-#                     if comp_subclass:
-#                         asset_specs = {
-#                             "pc_type": getattr(comp_subclass, 'pc_type', None),
-#                             "processor": getattr(comp_subclass, 'processor', None),
-#                             "memory_ram": getattr(comp_subclass, 'memory_ram', None),
-#                             "hard_disk": getattr(comp_subclass, 'hard_disk', None),
-#                             "bag_brand": getattr(comp_subclass, 'bag_brand', None),
-#                             "bag_model_or_description": getattr(comp_subclass, 'bag_model_or_description', None) or getattr(comp_subclass, 'bag_model_or_descrp', None),
-#                         }
-#                 except ObjectDoesNotExist:
-#                     # Fallback context safe handling if it's a regular asset rather than a computer subclass
-#                     asset_specs = {}
-
-#             data.append({
-#                 "assignment_id": custody.id,
-#                 "assignment_date": custody.assignment_date,
-#                 "notes": custody.notes,
-                
-#                 # إرجاع بيانات الـ Consumer مع ملء بيانات الفرع والقسم ديناميكياً سواء كان هناك موظف أم لا
-#                 "employee": {
-#                     "employee_code": emp.employee_code if emp else None,
-#                     "name_en": emp.name_en if emp else None,
-#                     "name_ar": emp.name_ar if emp else None,
-#                     "branch": branch_name,
-#                     "sector": sector_name,
-#                     "department": department_name,
-#                     "assignment_type": "employee" if emp else "structure"
-#                 },
-                
-#                 "asset": {
-#                     "id": asset.id if asset else None,
-#                     "serial_number": asset.serial_number if asset else None,
-#                     "brand": asset.brand if asset else None,
-#                     "model_or_pn": asset.model_or_pn if asset else None,
-#                     "status": asset.status if asset else None,
-#                     "specs": asset_specs  # 🌟 Dynamic specs array injected here
-#                 }
-#             })
-
-#         return Response(data, status=status.HTTP_200_OK)
-
-#     except Exception as e:
-#         return Response(
-#             {"error": str(e)},
-#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#         )
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_all_active_assignments(request):
     """
     API view to get all currently assigned hardware assets and the entities holding them.
     Filters out returned assets (return_date IS NULL) and supports both employee and direct structural custody.
     Explicitly joins with ComputerAsset from the hw_spec app to return asset specs.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view active assignments."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # 🌟 عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
         active_assignments = ConsumerCustody.objects.filter(
@@ -1239,14 +1055,22 @@ def get_all_active_assignments(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-        
-        
+
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_assigned_assets_count(request):
     """
     API view to return the total number of currently assigned hardware assets.
     Matches the business logic of active assignments (issued and not yet returned).
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view assignment stats."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # 🚀 Extremely fast because it executes a single SELECT COUNT(*) query
         assigned_count = ConsumerCustody.objects.filter(
@@ -1267,20 +1091,22 @@ def get_assigned_assets_count(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
- 
-        
-from django.db.models import Q
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from .models import ConsumerCustody
+
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_assigned_assets_by_category(request):
     """
     API view to get all currently assigned hardware assets filtered by category name.
     Supports both employee custody and direct structural layout assignment securely.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view assignments by category."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     category_name = request.query_params.get('name', None)
     
     if not category_name:
@@ -1404,20 +1230,22 @@ def get_assigned_assets_by_category(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         ) 
-         
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from apps.hardware_specs.models import BaseAsset
-from .models import ConsumerCustody
-from .serializers import CustodyAssignmentLookupSerializer
+
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_custody_by_serial(request, serial_number):
     """
     Looks up who or what branch layout currently holds custody of a device by its serial number.
     Supports both live employee custody and direct structural branch framework assignments.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view custody entries."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         # 1️⃣ التحقق من وجود الأصل أولاً مع عمل Join للفئة لمنع الاستعلامات المتكررة
         asset = BaseAsset.objects.select_related('category').get(serial_number=serial_number)
@@ -1493,16 +1321,19 @@ def get_custody_by_serial(request, serial_number):
     }, status=status.HTTP_200_OK)
     
     
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from .serializers import CustodyAssignmentLookupSerializer # Replace with your actual Serializer name
-
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_assignments_by_employee_code(request, emp_code):
     """
     API View to retrieve all active/past assignments for an employee with asset category.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view employee assignments."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         assignments = ConsumerCustody.objects.filter(
             employee__employee_code=emp_code

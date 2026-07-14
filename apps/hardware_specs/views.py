@@ -1,8 +1,10 @@
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Count, Q
 from django.db.models import ProtectedError
+
+from rest_framework.permissions import IsAuthenticated
 
 from .models import BaseAsset, ComputerAsset, PrinterAsset, TabletAsset, MonitorAsset, AssetCategory
 from .serializers import (
@@ -19,8 +21,16 @@ from .serializers import (
 # =====================================================================
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def hardware_asset_list(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view the hardware assets list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # 🚀 Query Optimization لضمان الأداء السريع جداً مع جلب الهيكل الجديد للموظف المستلم
         assets = BaseAsset.objects.select_related(
             'category'
@@ -36,18 +46,34 @@ def hardware_asset_list(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.add_baseasset'):
+            return Response(
+                {"error": "You do not have permission to create a hardware asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BaseAssetSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def maintenance_assets_by_category(request):
     """
     API view to return all hardware assets with status='maintenance',
     filtered dynamically by an English category name query parameter.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_baseasset'):
+        return Response(
+            {"error": "You do not have permission to view maintenance assets."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     category_param = request.query_params.get('category')
 
     if not category_param:
@@ -72,12 +98,20 @@ def maintenance_assets_by_category(request):
     serializer = BaseAssetFlatSerializer(queryset, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def hardware_asset_instock_count(request):
     """
     Returns the total number of hardware assets that are currently 'in_stock'.
     """
-    # Assuming your model field is named 'status'. Change 'in_stock' if your choice value differs.
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_baseasset'):
+        return Response(
+            {"error": "You do not have permission to view stock counts."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     instock_count = BaseAsset.objects.filter(status='in_stock').count()
     
     return Response(
@@ -88,7 +122,9 @@ def hardware_asset_instock_count(request):
         status=status.HTTP_200_OK
     )
 
+
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def hardware_asset_detail(request, pk):
     try:
         asset = BaseAsset.objects.get(pk=pk)
@@ -96,10 +132,24 @@ def hardware_asset_detail(request, pk):
         return Response({'error': 'Asset not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view this asset's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BaseAssetFlatSerializer(asset)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.change_baseasset'):
+            return Response(
+                {"error": "You do not have permission to update this asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BaseAssetSerializer(asset, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -107,6 +157,13 @@ def hardware_asset_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.delete_baseasset'):
+            return Response(
+                {"error": "You do not have permission to delete this asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         asset.delete()
         return Response({'message': 'Asset deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
@@ -116,13 +173,28 @@ def hardware_asset_detail(request, pk):
 # =====================================================================
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def printer_list(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view the printers list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         printers = PrinterAsset.objects.all().order_by('-baseasset_ptr_id')
         serializer = PrinterSerializer(printers, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.add_baseasset'):
+            return Response(
+                {"error": "You do not have permission to add a printer asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = PrinterSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -131,6 +203,7 @@ def printer_list(request):
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def printer_detail(request, pk):
     try:
         printer = PrinterAsset.objects.get(baseasset_ptr_id=pk)
@@ -138,10 +211,24 @@ def printer_detail(request, pk):
         return Response({'error': 'Printer specs not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view this printer's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = PrinterSerializer(printer)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.change_baseasset'):
+            return Response(
+                {"error": "You do not have permission to update this printer."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = PrinterSerializer(printer, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -149,6 +236,13 @@ def printer_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.delete_baseasset'):
+            return Response(
+                {"error": "You do not have permission to delete this printer."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         printer.delete()
         return Response({'message': 'Printer specs deleted'}, status=status.HTTP_204_NO_CONTENT)
     
@@ -156,28 +250,36 @@ def printer_detail(request, pk):
 # =====================================================================
 # 3. عمليات الأجهزة (Computers CRUD)
 # =====================================================================  
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-from apps.hardware_specs.models import AssetCategory
-from .models import ComputerAsset
-from .serializers import ComputerSerializer
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def computer_list(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view the computer assets list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         computers = ComputerAsset.objects.all().order_by('-baseasset_ptr_id')
         serializer = ComputerSerializer(computers, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.add_baseasset'):
+            return Response(
+                {"error": "You do not have permission to create a computer asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Create a mutable copy of request data so we can modify it
         data = request.data.copy()
         
         # Automatically assign the category if it wasn't provided in the body
         if not data.get('category'):
             try:
-                # Adjust the lookup filter ('name', 'name_en', or 'slug') based on your AssetCategory fields
                 category_obj, created = AssetCategory.objects.get_or_create(
                     name_en="Computer", 
                     defaults={"name_ar": "أجهزة كمبيوتر"}
@@ -196,7 +298,9 @@ def computer_list(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def computer_detail(request, pk):
     try:
         computer = ComputerAsset.objects.get(baseasset_ptr_id=pk)
@@ -204,10 +308,24 @@ def computer_detail(request, pk):
         return Response({'error': 'Computer asset not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view this computer's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = ComputerSerializer(computer)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.change_baseasset'):
+            return Response(
+                {"error": "You do not have permission to update this computer."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = ComputerSerializer(computer, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -215,12 +333,27 @@ def computer_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.delete_baseasset'):
+            return Response(
+                {"error": "You do not have permission to delete this computer."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         computer.delete()
         return Response({'message': 'Computer asset deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
     
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def computer_list_by_type(request, pc_type):
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_baseasset'):
+        return Response(
+            {"error": "You do not have permission to view filtered computer assets."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     clean_type = pc_type.lower()
     if clean_type not in ['desktop', 'laptop']:
         return Response(
@@ -238,13 +371,28 @@ def computer_list_by_type(request, pc_type):
 # =====================================================================
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def tablet_list(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view the tablet assets list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         tablets = TabletAsset.objects.all().order_by('-baseasset_ptr_id')
         serializer = TabletSerializer(tablets, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.add_baseasset'):
+            return Response(
+                {"error": "You do not have permission to create a tablet asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = TabletSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -253,6 +401,7 @@ def tablet_list(request):
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def tablet_detail(request, pk):
     try:
         tablet = TabletAsset.objects.get(baseasset_ptr_id=pk)
@@ -260,10 +409,24 @@ def tablet_detail(request, pk):
         return Response({'error': 'Tablet asset not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view this tablet's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = TabletSerializer(tablet)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.change_baseasset'):
+            return Response(
+                {"error": "You do not have permission to update this tablet."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = TabletSerializer(tablet, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -271,6 +434,13 @@ def tablet_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.delete_baseasset'):
+            return Response(
+                {"error": "You do not have permission to delete this tablet."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         tablet.delete()
         return Response({'message': 'Tablet asset deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
@@ -280,7 +450,15 @@ def tablet_detail(request, pk):
 # =====================================================================
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def inventory_stock_report_fast(request):
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to view inventory reports."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     categories_data = AssetCategory.objects.annotate(
         quantity_in_stock=Count('assets', filter=Q(assets__status='in_stock')),
         quantity_assigned=Count('assets', filter=Q(assets__status='assigned'))
@@ -298,8 +476,16 @@ def inventory_stock_report_fast(request):
 # =====================================================================
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_all_categories(request):
     """جلب كافة التصنيفات الموجودة في النظام بدون استثناء"""
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to view asset categories."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     categories = AssetCategory.objects.all().order_by('id')
     data = [
         {
@@ -313,8 +499,16 @@ def get_all_categories(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_spare_parts_categories(request):
     """جلب تصنيفات قطع الغيار والاكسسوارات فقط (Spare Parts)"""
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to view spare parts categories."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     categories = AssetCategory.objects.filter(category_type='accessory').order_by('id')
     data = [
         {
@@ -326,8 +520,17 @@ def get_spare_parts_categories(request):
     ]
     return Response(data, status=status.HTTP_200_OK)
 
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_base_asset_categories(request):
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to view base asset categories."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     categories = AssetCategory.objects.filter(category_type='base_asset').order_by('id')
     data = [
         {
@@ -341,7 +544,15 @@ def get_base_asset_categories(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_accessory_categories(request):
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to view accessory categories."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     categories = AssetCategory.objects.filter(category_type='accessory').order_by('id')
     data = [
         {
@@ -355,7 +566,19 @@ def get_accessory_categories(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def post_new_category(request):
+    """
+    API view to create a new Asset Category.
+    🔒 Only users with 'Can add Asset Category' permission can access.
+    """
+    # 🔒 Authorization Check: Validate database permission
+    if not request.user.has_perm('hardware_specs.add_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to create a category."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     name_en = request.data.get('name_en')
     name_ar = request.data.get('name_ar')
     category_type = request.data.get('category_type', 'base_asset')
@@ -396,11 +619,24 @@ def post_new_category(request):
     
     
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
 def delete_category(request, pk):
+    """
+    API view to delete an Asset Category.
+    🔒 Only users with 'Can delete Asset Category' permission can access.
+    """
+    # 🔒 Authorization Check: Validate database permission
+    if not request.user.has_perm('hardware_specs.delete_assetcategory'):
+        return Response(
+            {"error": "You do not have permission to delete a category."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         category = AssetCategory.objects.get(id=pk)
+        category_name = category.name_en  # Save name before deleting
         category.delete()
-        return Response({"message": f"Category '{category.name_en}' deleted successfully."}, status=status.HTTP_200_OK)
+        return Response({"message": f"Category '{category_name}' deleted successfully."}, status=status.HTTP_200_OK)
         
     except AssetCategory.DoesNotExist:
         return Response({"error": "Category not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -413,17 +649,32 @@ def delete_category(request, pk):
 
 
 # =====================================================================
-# 7. عمليات الشاشات (Monitors CRUD) - الأسماء الأصلية تماماً
+# 7. عمليات الشاشات (Monitors CRUD) 
 # =====================================================================
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def monitor_list_create(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view the monitor assets list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         monitors = MonitorAsset.objects.all().order_by('-baseasset_ptr_id')
         serializer = MonitorSerializer(monitors, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.add_baseasset'):
+            return Response(
+                {"error": "You do not have permission to create a monitor asset."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = MonitorSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -432,6 +683,7 @@ def monitor_list_create(request):
 
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def monitor_detail_update_delete(request, pk):
     try:
         monitor = MonitorAsset.objects.get(baseasset_ptr_id=pk)
@@ -445,10 +697,24 @@ def monitor_detail_update_delete(request, pk):
             )
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.view_baseasset'):
+            return Response(
+                {"error": "You do not have permission to view this monitor's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = MonitorSerializer(monitor)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.change_baseasset'):
+            return Response(
+                {"error": "You do not have permission to update this monitor."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = MonitorSerializer(monitor, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -456,6 +722,13 @@ def monitor_detail_update_delete(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'PATCH':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.change_baseasset'):
+            return Response(
+                {"error": "You do not have permission to update this monitor."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = MonitorSerializer(monitor, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -463,19 +736,27 @@ def monitor_detail_update_delete(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('hardware_specs.delete_baseasset'):
+            return Response(
+                {"error": "You do not have permission to delete this monitor."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         monitor.delete()
         return Response({"message": "Monitor asset successfully deleted."}, status=status.HTTP_200_OK)
     
     
-from django.db.models import Q
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
-from rest_framework import status
-
-
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_in_stock_assets_by_category(request):
-    
+    # 🔒 Authorization Check
+    if not request.user.has_perm('hardware_specs.view_baseasset'):
+        return Response(
+            {"error": "You do not have permission to view stock assets filtered by category."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     category_name = request.query_params.get('category', None)
     
     if not category_name:
@@ -485,7 +766,6 @@ def get_in_stock_assets_by_category(request):
         )
 
     try:
-        
         assets = BaseAsset.objects.select_related(
             'category', 
             'computerasset'
@@ -500,7 +780,6 @@ def get_in_stock_assets_by_category(request):
         for asset in assets:
             cat = asset.category
             
-            
             asset_data = {
                 "id": asset.id,
                 "serial_number": getattr(asset, 'serial_number', None),
@@ -514,18 +793,14 @@ def get_in_stock_assets_by_category(request):
                 }
             }
 
-           
             if cat and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
-                
                 comp_specs = getattr(asset, 'computerasset', None)
-                
                 if comp_specs:
                     asset_data["specs"] = {
                         "processor": getattr(comp_specs, 'processor', None),
                         "ram": getattr(comp_specs, 'ram', None),
                         "storage": getattr(comp_specs, 'storage', None),
                         "os": getattr(comp_specs, 'os', None),
-                        
                     }
                 else:
                     asset_data["specs"] = "No hardware specs recorded for this computer"

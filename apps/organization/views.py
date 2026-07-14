@@ -1,5 +1,6 @@
-from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from .models import Branch, Sector, Department, BranchStructure
 from .serializers import (
@@ -16,13 +17,28 @@ from .serializers import (
 # 🏢 BRANCHES CRUD
 # ==========================================
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def branch_list(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_branch'):
+            return Response(
+                {"error": "You do not have permission to view the branches list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         branches = Branch.objects.all().order_by('branch_id')
         serializer = BranchSerializer(branches, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.add_branch'):
+            return Response(
+                {"error": "You do not have permission to add a branch."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BranchSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -31,10 +47,18 @@ def branch_list(request):
     
 
 @api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
 def update_branch(request, branch_id):
     """
     API view to update a Branch name or properties by its branch_id.
     """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('organization.change_branch'):
+        return Response(
+            {"error": "You do not have permission to update branches."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     try:
         branch = Branch.objects.get(branch_id=branch_id)
         
@@ -77,6 +101,7 @@ def update_branch(request, branch_id):
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def branch_detail(request, pk):
     try:
         branch = Branch.objects.get(pk=pk)
@@ -84,10 +109,24 @@ def branch_detail(request, pk):
         return Response({'error': 'Branch not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_branch'):
+            return Response(
+                {"error": "You do not have permission to view this branch's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BranchSerializer(branch)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.change_branch'):
+            return Response(
+                {"error": "You do not have permission to update this branch."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BranchSerializer(branch, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -95,6 +134,13 @@ def branch_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.delete_branch'):
+            return Response(
+                {"error": "You do not have permission to delete this branch."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         branch.delete()
         return Response({'message': 'Branch deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
@@ -102,16 +148,35 @@ def branch_detail(request, pk):
 # ==========================================
 # 📊 SECTORS CRUD
 # ==========================================
-from apps.organization.models import BranchStructure, Branch, Department # تأكد من استيراد الموديلات
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def sector_list(request):
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_sector'):
+            return Response(
+                {"error": "You do not have permission to view the sectors list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         sectors = Sector.objects.all().order_by('sector_id')
         serializer = SectorReadSerializer(sectors, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'POST':
+        # 🔒 Authorization Check: يتطلب صلاحية إضافة قطاع وربطه بالفرع
+        if not request.user.has_perm('organization.add_sector'):
+            return Response(
+                {"error": "You do not have permission to add a sector."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        if not request.user.has_perm('organization.add_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to create structural links for this sector."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = SectorSerializer(data=request.data)
         if serializer.is_valid():
             # 1. حفظ القطاع الجديد أولاً في جدول sectors
@@ -139,17 +204,28 @@ def sector_list(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         print("Serializer Errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def sectors_by_branch(request, branch_id):
     """جلب كافة القطاعات التابعة لفرع معين بناءً على الـ branch_id عبر الجدول المركزي"""
-    
+    # 🔒 Authorization Check
+    if not request.user.has_perm('organization.view_sector'):
+        return Response(
+            {"error": "You do not have permission to view filtered sectors."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     # نقوم بالفلترة من خلال العلاقة العكسية لجدول الهيكل التنظيمي الموحد
     sectors = Sector.objects.filter(structures__branch_id=branch_id).distinct()
     
     serializer = SectorSerializer(sectors, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
+
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def sector_detail(request, pk):
     try:
         sector = Sector.objects.get(pk=pk)
@@ -157,10 +233,24 @@ def sector_detail(request, pk):
         return Response({'error': 'Sector not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_sector'):
+            return Response(
+                {"error": "You do not have permission to view this sector's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = SectorReadSerializer(sector)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.change_sector'):
+            return Response(
+                {"error": "You do not have permission to update this sector."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = SectorSerializer(sector, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -168,6 +258,13 @@ def sector_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check: عملية الحذف هنا تمسح الربط الهيكلي للقطاع
+        if not request.user.has_perm('organization.delete_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to remove sector structural links."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # 📥 Extract the specific branch from query parameters
         branch_id = request.query_params.get('branch_id')
 
@@ -201,15 +298,23 @@ def sector_detail(request, pk):
             }, 
             status=status.HTTP_200_OK
         )
+
+
 # ==========================================
 # 🗂️ DEPARTMENTS CRUD (Centralized Structure)
 # ==========================================
 
-# 🌟 تأكد من إضافة الـ branch_id والـ sector_id هنا في قوس التعريف
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def department_list(request, branch_id, sector_id):
     if request.method == 'GET':
-        # ... كود الـ GET الحالي ...
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_department'):
+            return Response(
+                {"error": "You do not have permission to view the departments list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         structures = BranchStructure.objects.filter(
             branch_id=branch_id, 
             sector_id=sector_id
@@ -222,7 +327,18 @@ def department_list(request, branch_id, sector_id):
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     elif request.method == 'POST':
-        # ... كود الـ POST الحالي ...
+        # 🔒 Authorization Check: إضافة إدارة وربطها بالهيكل
+        if not request.user.has_perm('organization.add_department'):
+            return Response(
+                {"error": "You do not have permission to add a department."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        if not request.user.has_perm('organization.add_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to create structural links for this department."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = DepartmentSerializer(data=request.data)
         if serializer.is_valid():
             department = serializer.save()
@@ -243,9 +359,18 @@ def department_list(request, branch_id, sector_id):
             return Response(full_data_serializer.data, status=status.HTTP_201_CREATED)
             
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def departments_by_sector(request, branch_id, sector_id):
     """جلب كافة الإدارات التابعة لقطاع معين داخل فرع محدد عبر الجدول المركزي"""
+    # 🔒 Authorization Check
+    if not request.user.has_perm('organization.view_department'):
+        return Response(
+            {"error": "You do not have permission to view filtered departments."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
     
     # 1. الفلترة بالفرع والقطاع معاً داخل جدول الهيكل الموحد
     structures = BranchStructure.objects.filter(
@@ -261,7 +386,10 @@ def departments_by_sector(request, branch_id, sector_id):
     
     serializer = DepartmentSerializer(departments, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def department_detail(request, pk):
     try:
         department = Department.objects.get(pk=pk)
@@ -270,11 +398,25 @@ def department_detail(request, pk):
 
     # 🔹 GET Method: Fetch master department details
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_department'):
+            return Response(
+                {"error": "You do not have permission to view this department's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = DepartmentReadSerializer(department)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     # 🔹 PUT Method: Update master department details
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.change_department'):
+            return Response(
+                {"error": "You do not have permission to update this department."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = DepartmentSerializer(department, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -283,6 +425,13 @@ def department_detail(request, pk):
     
     # 🔹 DELETE Method: Remove structural mapping only
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check: يتم هنا حذف الربط الهيكلي للإدارة وليس الإدارة الرئيسية
+        if not request.user.has_perm('organization.delete_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to remove department structural links."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Safely extract ?branch_id=X&sector_id=Y from the URL
         branch_id = request.query_params.get('branch_id')
         sector_id = request.query_params.get('sector_id')
@@ -314,18 +463,35 @@ def department_detail(request, pk):
             {'message': 'The specific branch structure link for this department was deleted successfully.'}, 
             status=status.HTTP_200_OK
         )
+
+
 # =====================================================================
-# 🌟 BRANCH STRUCTURE CRUD (إضافة الدوال الجديدة للهيكل المشترك الموحد)
+# 🌟 BRANCH STRUCTURE CRUD (الهيكل المشترك الموحد)
 # =====================================================================
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def branch_structure_list(request):
     """جلب أو إنشاء توليفات الهيكل الإداري الموحد"""
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to view the branch structures list."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         structures = BranchStructure.objects.select_related('branch', 'sector', 'department').all().order_by('id')
         serializer = BranchStructureReadSerializer(structures, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
     elif request.method == 'POST':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.add_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to create a branch structure combination."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BranchStructureSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -334,6 +500,7 @@ def branch_structure_list(request):
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def branch_structure_detail(request, pk):
     """إدارة توليفة هيكلية معينة"""
     try:
@@ -342,10 +509,24 @@ def branch_structure_detail(request, pk):
         return Response({'error': 'Branch Structure combination not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.view_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to view this branch structure's details."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BranchStructureReadSerializer(structure)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
     elif request.method == 'PUT':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.change_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to update this branch structure."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = BranchStructureSerializer(structure, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -353,6 +534,13 @@ def branch_structure_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
     elif request.method == 'DELETE':
+        # 🔒 Authorization Check
+        if not request.user.has_perm('organization.delete_branchstructure'):
+            return Response(
+                {"error": "You do not have permission to delete this branch structure."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         structure.delete()
         return Response(
             {'message': 'Branch and its structures deleted successfully'}, 
