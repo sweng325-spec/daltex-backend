@@ -238,15 +238,13 @@ def update_employee(request, employee_code):
         if 'email' in request.data:
             employee.email = request.data['email']
             
-        # 🌟 تم إضافة تحديث حقل الحالة هنا ليعمل مع الـ PATCH من بوستمان
+        
         if 'status' in request.data:
             employee.status = request.data['status']
             
-        # 2️⃣ التعامل مع تحديثات الهيكل الإداري (Organizational Structure)
         structure_id = request.data.get('structure_id')
         
         if structure_id:
-            # حالة أ: الفرونت إند أرسل معرف الهيكل الجديد مباشرة
             try:
                 structure_obj = BranchStructure.objects.get(id=structure_id)
                 employee.branch_structure = structure_obj
@@ -254,10 +252,8 @@ def update_employee(request, employee_code):
                 return Response({"error": f"BranchStructure with ID '{structure_id}' does not exist."}, status=status.HTTP_404_NOT_FOUND)
                 
         elif any(k in request.data for k in ['branch_id', 'sector_id', 'department_id']):
-            # حالة ب: الفرونت إند أرسل معرفات منفصلة، نقوم ببناء فلتر ديناميكي للبحث
             current_struct = employee.branch_structure
             
-            # نأخذ القيم الجديدة من الـ request، وإذا لم ترسل نعتمد على القيم الحالية للموظف كـ fallback
             branch_id = request.data.get('branch_id') or (current_struct.branch_id if current_struct else None)
             sector_id = request.data.get('sector_id') or (current_struct.sector_id if current_struct else None)
             department_id = request.data.get('department_id') or (current_struct.department_id if current_struct else None)
