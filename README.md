@@ -1,44 +1,43 @@
 # Daltex Asset & Organization Management API
 
-مشرع إدارة الأصول والمخزن المركزي لشركة دالتكس (**Daltex Group**)، وهو عبارة عن خلفية برمجية (Backend API) قوية مبنية باستخدام **Django 6** و **Django Rest Framework (DRF)**. يوفر النظام إدارة متكاملة لجرد الإكسسوارات، تتبع الأصول الصلبة (Hardware Assets)، وإدارة الهيكل الإداري والتنظيمي للشركة بشكل مركزي ومؤمن بالكامل بالصلاحيات.
+The central Asset and Inventory Management system for **Daltex Group**, built as a robust Backend API using **Django 6** and **Django REST Framework (DRF)**. This system provides integrated management for accessory stock tracking, hardware asset tracking, and centralized organization structure management (Branches, Sectors, Departments), all fully secured with granular permission controls.
 
 ---
 
-## 🚀 الميزات الرئيسية (Key Features)
+## 🚀 Key Features
 
-* **إدارة أصول المخزن (`inventory`):** تتبع كميات قطع الغيار والإكسسوارات مع نظام لوج (Audit Log) آلي لتسجيل كل حركات الإضافة والعجز والتعديل مع فحص صلاحيات صارم (`view_inventoryitem`, `add_inventoryitem`, `change_inventoryitem`, `delete_inventoryitem`).
-* **إدارة الهيكل التنظيمي (`organization`):** نظام مرن لإدارة الفروع (Branches)، القطاعات (Sectors)، والإدارات (Departments) وربطهم ديناميكيًا عبر جدول هيكلي موحد (`BranchStructure`) ومؤمن بالكامل بصلاحيات القراءة، الإضافة، التعديل، والحذف لكل موديل.
-* **تأمين صارم للبيانات (Granular Security):** حماية كاملة لكافة المسارات (Endpoints) باستخدام فحص الصلاحيات الافتراضي من Django ومصادقة **JWT Tokens**.
-* **قاعدة بيانات مهيأة للإنتاج:** متوافق بالكامل مع قواعد بيانات **PostgreSQL** عبر محرك `psycopg3`.
+* **Inventory Asset Management (`inventory`):** Track spare parts and accessory quantities with an automated transaction audit log to record additions, adjustments, and deductions, secured by strict Django permission checks (`view_inventoryitem`, `add_inventoryitem`, `change_inventoryitem`, `delete_inventoryitem`).
+* **Organization Structure Management (`organization`):** A flexible system to manage Branches, Sectors, and Departments, linking them dynamically via a unified mapping table (`BranchStructure`). Fully secured with View, Add, Change, and Delete permissions for each individual model.
+* **Granular Security:** Comprehensive protection for all endpoints utilizing Django's built-in model permissions combined with **JWT Token** authentication.
+* **Production-Ready Database:** Fully compatible with **PostgreSQL** databases using the modern `psycopg3` database adapter.
 
 ---
 
-## 🛠️ تقنيات المشروع (Tech Stack)
+## 🛠️ Tech Stack
 
 * **Framework:** Django 6.0.6 & Django REST Framework 3.17.1
 * **Database Driver:** Psycopg 3.3.4 (PostgreSQL)
-* **Authentication:** SimpleJWT (JSON Web Tokens)
-* **CORS Handling:** django-cors-headers
+* **Authentication:** djangorestframework-simplejwt 5.5.1 (JSON Web Tokens)
+* **CORS Handling:** django-cors-headers 4.9.0
 
 ---
 
-## 📋 متطلبات التشغيل (Prerequisites)
+## 📋 Prerequisites
 
-تأكد من تثبيت الأدوات التالية على نظامك قبل البدء:
+Ensure you have the following installed on your system before proceeding:
 * **Python 3.10+**
 * **PostgreSQL Database Server**
 
 ---
 
-## 🔧 خطوات إعداد وتشغيل المشروع (Setup & Installation)
+## 🔧 Setup & Installation
 
-تابع الخطوات التالية بدقة لإعداد بيئة العمل المحلية:
+Follow these steps carefully to configure and run your local development environment:
 
-### 1. استنساخ المستودع والدخول للمجلد
+### 1. Clone the Repository and Navigate to the Project Folder
 ```bash
 git clone <repository_url>
 cd DALTEX_ASSET_APP
-
 ### 2.
 python -m venv venv
 .\venv\Scripts\activate
