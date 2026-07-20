@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'apps.inventory',
     'apps.hardware_specs',
     'apps.custody',
+    'apps.users'
 ]
 
 MIDDLEWARE = [

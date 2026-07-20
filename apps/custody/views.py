@@ -20,16 +20,6 @@ from apps.custody.models import Employee
 @permission_classes([IsAuthenticated])
 def add_new_employee(request):
     try:
-        # 🔍 DEBUGGING LINES: Check your terminal when you make the request!
-        print("--- DEBUGGING USER PERMISSIONS ---")
-        print(f"Username: {request.user.username}")
-        print(f"Is Superuser? {request.user.is_superuser}")
-        print(f"Is Staff? {request.user.is_staff}")
-        print(f"Direct Permissions: {request.user.user_permissions.all()}")
-        print(f"Group Permissions: {request.user.get_group_permissions()}")
-        print(f"All Permissions: {request.user.get_all_permissions()}")
-        print(f"Has 'custody.add_employee' permission? {request.user.has_perm('custody.add_employee')}")
-        print("----------------------------------")
 
         # 🔒 Authorization Check
         if not request.user.has_perm('custody.add_employee'):
@@ -86,23 +76,15 @@ def unique_employee_list(request):
     API view to fetch all employees from the independent master table 
     with their consolidated branch, department, and status details.
     """
-    # ==================== 🔍 PERMISSION DEBUG TRACE ====================
-    print("\n" + "="*60)
-    print(f"🕵️‍♂️ DEBUGGING PERMISSIONS FOR USER: {request.user.username}")
-    print(f"Active Status: {request.user.is_active}")
-    print(f"Superuser Status: {request.user.is_superuser}")
-    print(f"User Groups: {list(request.user.groups.values_list('name', flat=True))}")
+    
     
     # This prints every permission assigned to Jana's account/groups
     user_perms = list(request.user.get_all_permissions())
-    print(f"All Assigned Permissions: {user_perms}")
+   
     
     # Check if 'custody.view_employee' is actually the right label
     has_custody_perm = request.user.has_perm('custody.view_employee')
-    print(f"Result of has_perm('custody.view_employee'): {has_custody_perm}")
-    print("="*60 + "\n")
-    # ===================================================================
-
+    
     # 🔒 Authorization Check
     if not has_custody_perm:
         return Response(
@@ -118,7 +100,7 @@ def unique_employee_list(request):
         )
 
     try:
-        # الوصول للعلاقات المبطنة عبر جدول الهيكل الموحد
+        
         employees = Employee.objects.select_related(
             'branch_structure__branch', 
             'branch_structure__department'
@@ -845,8 +827,8 @@ def get_global_custody_history(request):
                 )
             sector_name = None
             if struct and getattr(struct, 'sector', None):
-                branch_name = (
-                    getattr(struct.sector, 'sector_name', None) or 
+                sector_name = (
+                    getattr(struct.sector, 'name', None) or 
                     getattr(struct.sector, 'sector_name', None) or 
                     getattr(struct.sector, 'name', None) or 
                     str(struct.sector)
@@ -855,7 +837,7 @@ def get_global_custody_history(request):
             department_name = None
             if struct and getattr(struct, 'department', None):
                 department_name = (
-                    getattr(struct.department, 'name_en', None) or 
+                    getattr(struct.department, 'name', None) or 
                     getattr(struct.department, 'department_name', None) or 
                     getattr(struct.department, 'name', None) or 
                     str(struct.department)
