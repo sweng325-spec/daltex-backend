@@ -173,3 +173,91 @@ def manage_user_groups(request, user_id):
             ]
         }
     }, status=status.HTTP_200_OK)
+    
+from django.contrib.auth import get_user_model
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+User = get_user_model()
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def deactivate_user(request, user_id):
+    """
+    Deactivates a user account (sets is_active=False).
+    Requires 'auth.change_user' or superuser permissions.
+    """
+    # 1. Permission Check: Ensure only authorized admins can deactivate accounts
+    if not (request.user.is_superuser or request.user.has_perm('auth.change_user')):
+        return Response(
+            {"error": "You do not have permission to deactivate user accounts."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # 2. Prevent self-deactivation (Optional but recommended safeguard)
+    if request.user.id == user_id:
+        return Response(
+            {"error": "You cannot deactivate your own account."}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # 3. Fetch the target user
+    try:
+        user_to_deactivate = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response(
+            {"error": "User not found."}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # 4. Perform Deactivation
+    user_to_deactivate.is_active = False
+    user_to_deactivate.save()
+
+    return Response({
+        "message": f"User '{user_to_deactivate.username}' (ID: {user_id}) has been deactivated successfully.",
+        "is_active": user_to_deactivate.is_active
+    }, status=status.HTTP_200_OK)
+    
+    from django.contrib.auth import get_user_model
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+User = get_user_model()
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])  # 🔒 Only Superusers allowed
+def reactivate_user(request, user_id):
+    """
+    Reactivates a user account (sets is_active=True).
+    Accessible ONLY by Superusers.
+    """
+    # 1. Fetch the target user
+    try:
+        user_to_reactivate = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response(
+            {"error": "User not found."}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # 2. Check if already active
+    if user_to_reactivate.is_active:
+        return Response(
+            {"message": f"User '{user_to_reactivate.username}' is already active."}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # 3. Perform Reactivation
+    user_to_reactivate.is_active = True
+    user_to_reactivate.save()
+
+    return Response({
+        "message": f"User '{user_to_reactivate.username}' (ID: {user_id}) has been reactivated successfully.",
+        "is_active": user_to_reactivate.is_active
+    }, status=status.HTTP_200_OK)
+    

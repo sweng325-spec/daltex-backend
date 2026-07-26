@@ -34,5 +34,6 @@ urlpatterns = [
     path('auth/groups/', views.list_groups, name='list-groups'),
     path('auth/users/', views.list_users_with_groups, name='list-users-with-groups'),
     path('auth/users/<int:user_id>/groups/', views.manage_user_groups, name='manage-user-groups'),
-
+    path('users/<int:user_id>/deactivate/', views.deactivate_user, name='deactivate_user'),
+    path('users/<int:user_id>/reactivate/', views.reactivate_user, name='reactivate_user'),
 ]
