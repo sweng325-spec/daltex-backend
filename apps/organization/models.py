@@ -66,3 +66,5 @@ class BranchStructure(models.Model):
 
     def __str__(self):
         return f"{self.branch.name_en} -> {self.sector.sector_name} -> {self.name}"
+    
+    

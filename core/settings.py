@@ -159,7 +159,7 @@ STATIC_URL = 'static/'
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(seconds=3600),
+    "ACCESS_TOKEN_LIFETIME": timedelta(seconds=10000),
     "REFRESH_TOKEN_LIFETIME": timedelta(seconds=10000),
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": False,

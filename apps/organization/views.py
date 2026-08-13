@@ -304,6 +304,14 @@ def sector_detail(request, pk):
 # 🗂️ DEPARTMENTS CRUD (Centralized Structure)
 # ==========================================
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from django.db import transaction
+from .models import Department, BranchStructure
+from .serializers import DepartmentSerializer, DepartmentReadSerializer
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def department_list(request, branch_id, sector_id):
@@ -315,13 +323,11 @@ def department_list(request, branch_id, sector_id):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        structures = BranchStructure.objects.filter(
-            branch_id=branch_id, 
-            sector_id=sector_id
-        ).select_related('department')
-        
-        departments = list({struct.department for struct in structures if struct.department})
-        departments.sort(key=lambda x: x.id)
+        # Efficient Query: Get unique departments directly via junction table filtering
+        departments = Department.objects.filter(
+            structures__branch_id=branch_id,
+            structures__sector_id=sector_id
+        ).distinct().order_by('id')
         
         serializer = DepartmentReadSerializer(departments, many=True) 
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -339,26 +345,38 @@ def department_list(request, branch_id, sector_id):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        serializer = DepartmentSerializer(data=request.data)
-        if serializer.is_valid():
-            department = serializer.save()
-            
-            try:
-                BranchStructure.objects.create(
+        department_name = request.data.get('name', '').strip()
+        if not department_name:
+            return Response({"name": ["This field is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Wrap in an atomic block so both creation and linking succeed together
+            with transaction.atomic():
+                # 1. Fetch existing department catalog item or create it if missing
+                department, created = Department.objects.get_or_create(name=department_name)
+                
+                # 2. Check or create the relationship link in BranchStructure
+                structure, link_created = BranchStructure.objects.get_or_create(
                     branch_id=branch_id,
                     sector_id=sector_id,
                     department=department
                 )
-            except Exception as e:
-                return Response(
-                    {"error": f"Department created, but failed to link: {str(e)}"}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
+
+                if not link_created:
+                    return Response(
+                        {"error": f"The department '{department_name}' is already assigned to this sector."}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Return serialized data for frontend UI rendering
             full_data_serializer = DepartmentReadSerializer(department)
             return Response(full_data_serializer.data, status=status.HTTP_201_CREATED)
-            
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to process department assignment: {str(e)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 @api_view(['GET'])
