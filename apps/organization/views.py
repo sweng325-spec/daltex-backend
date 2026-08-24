@@ -2,7 +2,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from .models import Branch, Sector, Department, BranchStructure
+from .models import Branch, Sector, Department, BranchStructure,SubDepartment
 from .serializers import (
     BranchSerializer, 
     SectorSerializer, 
@@ -10,7 +10,9 @@ from .serializers import (
     DepartmentSerializer, 
     DepartmentReadSerializer,
     BranchStructureSerializer,
-    BranchStructureReadSerializer
+    BranchStructureReadSerializer,
+    SubDepartmentSerializer,
+    SubDepartmentReadSerializer
 )
 
 # ==========================================
@@ -564,3 +566,42 @@ def branch_structure_detail(request, pk):
             {'message': 'Branch and its structures deleted successfully'}, 
             status=status.HTTP_204_NO_CONTENT
         )
+        
+        
+# ==========================================
+# 📂 SUB-DEPARTMENTS CRUD
+# ==========================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def subdepartments_by_structure(request, branch_id, sector_id, department_id):
+    """
+    جلب كافة الأقسام الفرعية التابعة لتركيبة معينة من الفرع، والقطاع، والإدارة.
+    """
+    # 🔒 Authorization Check
+    if not request.user.has_perm('organization.view_subdepartment'):
+        return Response(
+            {"error": "You do not have permission to view sub-departments."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # 1. البحث عن سجّل الربط الهيكلي المقابل للفرع، القطاع، والإدارة
+    try:
+        structure = BranchStructure.objects.get(
+            branch_id=branch_id,
+            sector_id=sector_id,
+            department_id=department_id
+        )
+    except BranchStructure.DoesNotExist:
+        return Response(
+            {"error": "No branch structure mapping found matching the provided branch, sector, and department."}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # 2. جلب كافة الأقسام الفرعية التابعة لهذا الهيكل تحديداً
+    subdepartments = SubDepartment.objects.filter(
+        branch_structure=structure
+    ).order_by('id')
+
+    serializer = SubDepartmentSerializer(subdepartments, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)

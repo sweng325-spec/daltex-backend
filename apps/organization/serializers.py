@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import Branch, Sector, Department, BranchStructure
+from .models import Branch, Sector, Department, BranchStructure, SubDepartment
+
 
 # ==========================================
 # 🏢 BRANCH SERIALIZERS
@@ -65,4 +66,22 @@ class BranchStructureReadSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BranchStructure
+        fields = '__all__'
+
+
+# ==========================================
+# 📂 SUB DEPARTMENT SERIALIZERS (الأقسام الفرعية)
+# ==========================================
+class SubDepartmentSerializer(serializers.ModelSerializer):
+    """يُستخدم لعمليات الإضافة والتعديل للأقسام الفرعية (يتوقع branch_structure كـ ID)"""
+    class Meta:
+        model = SubDepartment
+        fields = '__all__'
+
+class SubDepartmentReadSerializer(serializers.ModelSerializer):
+    """يُستخدم لعرض مفصل للقسم الفرعي مدمجاً معه تفاصيل الهيكل (الفرع والقطاع والإدارة)"""
+    branch_structure = BranchStructureReadSerializer(read_only=True)
+
+    class Meta:
+        model = SubDepartment
         fields = '__all__'

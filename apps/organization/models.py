@@ -21,7 +21,8 @@ class Branch(models.Model):
 class Sector(models.Model):
     
     sector_id = models.BigAutoField(primary_key=True)
-    sector_name = models.CharField(max_length=255, db_index=True,db_column='name')      
+    sector_name = models.CharField(max_length=255, db_index=True,db_column='name') 
+    # name_en = models.CharField(max_length=255, null=True, blank=True, default=None)     
     # created_at = models.DateTimeField(auto_now_add=True)
     # updated_at = models.DateTimeField(auto_now=True)
 
@@ -35,7 +36,8 @@ class Sector(models.Model):
 class Department(models.Model):
     
     id = models.BigAutoField(primary_key=True,db_column="dept_id")
-    name = models.CharField(max_length=255, db_index=True)     
+    name = models.CharField(max_length=255, db_index=True) 
+    # name_en = models.CharField(max_length=255, null=True, blank=True, default=None)    
     # created_at = models.DateTimeField(auto_now_add=True)
     # updated_at = models.DateTimeField(auto_now=True)
 
@@ -68,3 +70,24 @@ class BranchStructure(models.Model):
         return f"{self.branch.name_en} -> {self.sector.sector_name} -> {self.name}"
     
     
+class SubDepartment(models.Model):
+    # If linking directly to your BranchStructure model:
+    branch_structure = models.ForeignKey(
+        'BranchStructure', 
+        on_delete=models.CASCADE, 
+        related_name='sub_departments'
+    )
+    name = models.CharField(max_length=255)
+    name_en = models.CharField(max_length=255, null=True, blank=True, default=None)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sub_departments'
+        verbose_name = 'Sub Department'
+        verbose_name_plural = 'Sub Departments'
+        # Ensures duplicate sub-department names aren't created under the same structure
+        unique_together = ('branch_structure', 'name')
+
+    def __str__(self):
+        return self.name

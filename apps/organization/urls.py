@@ -32,4 +32,10 @@ urlpatterns = [
     # ==========================================
     path('structures/', views.branch_structure_list, name='branch_structure_list'),
     path('structures/<int:pk>/', views.branch_structure_detail, name='branch_structure_detail'),
+    # 📂 SubDepartments Filtered Endpoint
+    path(
+    'branches/<int:branch_id>/sectors/<int:sector_id>/departments/<int:department_id>/sub-departments/', 
+    views.subdepartments_by_structure, 
+    name='subdepartments-by-structure'
+),
 ]
