@@ -1074,13 +1074,18 @@ def get_assigned_assets_count(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import Q
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_assigned_assets_by_category(request):
     """
-    API view to get all currently assigned hardware assets filtered by category name.
-    Supports both employee custody and direct structural layout assignment securely.
+    Function-based API view using global settings.py pagination via PageNumberPagination().
     """
     # 🔒 Authorization Check
     if not request.user.has_perm('custody.view_consumercustody'):
@@ -1098,7 +1103,6 @@ def get_assigned_assets_by_category(request):
         )
 
     try:
-        # Optimized JOIN pattern pulling structural entities alongside category relationships
         active_assignments = ConsumerCustody.objects.filter(
             action_type='issue',
             return_date__isnull=True
@@ -1107,10 +1111,10 @@ def get_assigned_assets_by_category(request):
             'asset__computerasset',  
             'employee__branch_structure',
             'branch_structure',
-            'branch_structure__branch',      # Join for explicit branch extraction
-            'branch_structure__sector',      # Join for explicit sector extraction
-            'branch_structure__department',  # Join for explicit department extraction
-            'employee__branch_structure__branch',      # Backup fallback joins for employee's layout
+            'branch_structure__branch',
+            'branch_structure__sector',
+            'branch_structure__department',
+            'employee__branch_structure__branch',
             'employee__branch_structure__sector',
             'employee__branch_structure__department'
         ).filter(
@@ -1118,13 +1122,19 @@ def get_assigned_assets_by_category(request):
             Q(asset__category__name_ar__icontains=category_name)
         ).order_by('-assignment_date')
 
+        # 🌐 Instantiates settings.py global pagination rules
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(active_assignments, request)
+
+        # Slice target evaluation set based on paginated results
+        target_assignments = page if page is not None else active_assignments
+
         data = []
-        for custody in active_assignments:
+        for custody in target_assignments:
             emp = custody.employee
             asset = custody.asset
             cat = asset.category if asset else None
             
-            # Resolve the active operational structural tier
             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
 
             # 🏢 Safe Extraction for Structural Names
@@ -1155,9 +1165,8 @@ def get_assigned_assets_by_category(request):
                     str(struct.department)
                 )
 
-            # Asset Base Payload Structure
             asset_data = {
-                "id": asset.id if asset else None,  # 🌟 Dynamic Django primary key (BaseAsset auto-id)
+                "id": asset.id if asset else None,
                 "serial_number": asset.serial_number if asset else None,
                 "brand": asset.brand if asset else None,
                 "model_or_pn": asset.model_or_pn if asset else None,
@@ -1169,8 +1178,7 @@ def get_assigned_assets_by_category(request):
                 }
             }
 
-            # Handle technical variations for computer/laptop categories
-            if cat and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
+            if cat and cat.name_en and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
                 specs_obj = getattr(asset, 'computerasset', None) or getattr(asset, 'specs', None) or getattr(asset, 'computerspecs', None)
                 
                 if specs_obj:
@@ -1183,21 +1191,17 @@ def get_assigned_assets_by_category(request):
                 else:
                     asset_data["specs"] = "No specs recorded for this computer"
 
-            # Combine elements for unified assignment payload representation
             data.append({
                 "assignment_id": custody.id,
                 "assignment_date": custody.assignment_date,
                 "notes": custody.notes,
-                "asset_id": asset.id if asset else None,  # 🌟 Provided directly at the root layer as requested
-                
+                "asset_id": asset.id if asset else None,
                 "employee": {
                     "employee_code": emp.employee_code if emp else None,
                     "name_en": emp.name_en if emp else None,
                     "name_ar": emp.name_ar if emp else None,
                     "structure_id": struct.id if struct else None,
                     "assignment_type": "employee" if emp else "structure",
-                    
-                    # 🏢 Decoupled Structural Elements
                     "branch_name": branch_name,
                     "sector_name": sector_name,
                     "department_name": department_name
@@ -1205,14 +1209,17 @@ def get_assigned_assets_by_category(request):
                 "asset": asset_data
             })
 
+        # Return global pagination JSON structure if paginated
+        if page is not None:
+            return paginator.get_paginated_response(data)
+
         return Response(data, status=status.HTTP_200_OK)
 
     except Exception as e:
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        ) 
-
+        )
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

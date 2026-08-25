@@ -7,11 +7,13 @@ app_name = 'hardware_specs'
 urlpatterns = [
     # 1️⃣ مسارات الأصول الرئيسية (Base Assets CRUD)
     path('hardware-assets/', views.hardware_asset_list, name='hardware_asset_list'),
-path(
+
+    path(
     'hardware-assets/maintenance/', 
     views.maintenance_assets_by_category, 
     name='maintenance-assets-by-category'
-),    path('hardware-assets/<int:pk>/', views.hardware_asset_detail, name='hardware_asset_detail'),
+),  
+    path('hardware-assets/<int:pk>/', views.hardware_asset_detail, name='hardware_asset_detail'),
 
     # 2️⃣ مسارات مواصفات الطابعات (Printer Specs CRUD)
     path('printers/', views.printer_list, name='printer_list'),
@@ -19,7 +21,7 @@ path(
     
     # 3️⃣ مسارات مواصفات الكمبيوتر واللاب توب (Computers CRUD)
     path('computers/', views.computer_list, name='computer_list'),
-    path('computers/<int:pk>/', views.computer_detail, name='computer_detail'),
+    # path('computers/<int:pk>/', views.computer_detail, name='computer_detail'),
     # المسار الخاص بجلب الأجهزة بناءً على النوع (laptop / desktop)
     path('computers/type/<str:pc_type>/', views.computer_list_by_type, name='computer_list_by_type'),
     
