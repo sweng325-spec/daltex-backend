@@ -1073,6 +1073,325 @@ def get_assigned_assets_count(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+        
+        
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import Q
+
+from .models import ConsumerCustody
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_filtered_and_searched_assets_in_custody(request):
+    """
+    Function-based API view supporting global free-text search, multi-field dropdown 
+    filtering, category-specific spec resolution (Computer, Monitor, Printer, Tablet), 
+    and optional unpaginated exports via `?all=true`.
+    """
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view assignments."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # 1. Query Parameters Extraction
+    category_name = request.query_params.get('name', None)
+    search_query = request.query_params.get('search', None)
+    export_all = request.query_params.get('all', 'false').lower() == 'true'
+
+    # Filter params for dropdowns (support string names & numeric IDs)
+    filter_brand = request.query_params.get('brand', None)
+    filter_pc_type = request.query_params.get('pc_type', None)
+    
+    filter_branch = request.query_params.get('branch', None)
+    filter_branch_id = request.query_params.get('branch_id', None)
+    
+    filter_sector = request.query_params.get('sector', None)
+    filter_sector_id = request.query_params.get('sector_id', None)
+    
+    filter_department = request.query_params.get('department', None)
+    filter_dept_id = request.query_params.get('department_id', None)
+
+    try:
+        # Base Queryset targeting active custody assignments
+        active_assignments = ConsumerCustody.objects.filter(
+            action_type='issue',
+            return_date__isnull=True
+        ).select_related(
+            'asset__category', 
+            'asset__computerasset',
+            'asset__monitorasset',
+            'asset__printerasset',
+            'asset__tabletasset',
+            'employee__branch_structure',
+            'branch_structure',
+            'branch_structure__branch',
+            'branch_structure__sector',
+            'branch_structure__department',
+            'employee__branch_structure__branch',
+            'employee__branch_structure__sector',
+            'employee__branch_structure__department'
+        )
+
+        # 2. Category Filter (Optional: filter by category if 'name' is provided)
+        if category_name and category_name.strip():
+            cat_val = category_name.strip()
+            active_assignments = active_assignments.filter(
+                Q(asset__category__name_en__icontains=cat_val) | 
+                Q(asset__category__name_ar__icontains=cat_val)
+            )
+
+        # 3. Structured Dropdown Filters
+        if filter_brand and filter_brand.strip():
+            active_assignments = active_assignments.filter(asset__brand__iexact=filter_brand.strip())
+
+        if filter_pc_type and filter_pc_type.strip():
+            active_assignments = active_assignments.filter(asset__computerasset__pc_type__iexact=filter_pc_type.strip())
+
+        # Branch Filtering
+        if filter_branch_id and str(filter_branch_id).isdigit():
+            b_id = int(filter_branch_id)
+            active_assignments = active_assignments.filter(
+                Q(branch_structure__branch_id=b_id) |
+                Q(employee__branch_structure__branch_id=b_id)
+            )
+        elif filter_branch and filter_branch.strip():
+            b_val = filter_branch.strip()
+            if b_val.isdigit():
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__branch_id=int(b_val)) |
+                    Q(employee__branch_structure__branch_id=int(b_val))
+                )
+            else:
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__branch__name_en__icontains=b_val) |
+                    Q(branch_structure__branch__name_ar__icontains=b_val) |
+                    Q(employee__branch_structure__branch__name_en__icontains=b_val) |
+                    Q(employee__branch_structure__branch__name_ar__icontains=b_val)
+                )
+
+        # Sector Filtering
+        if filter_sector_id and str(filter_sector_id).isdigit():
+            s_id = int(filter_sector_id)
+            active_assignments = active_assignments.filter(
+                Q(branch_structure__sector_id=s_id) |
+                Q(employee__branch_structure__sector_id=s_id)
+            )
+        elif filter_sector and filter_sector.strip():
+            s_val = filter_sector.strip()
+            if s_val.isdigit():
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__sector_id=int(s_val)) |
+                    Q(employee__branch_structure__sector_id=int(s_val))
+                )
+            else:
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__sector__sector_name__icontains=s_val) |
+                    Q(branch_structure__sector__name_en__icontains=s_val) |
+                    Q(employee__branch_structure__sector__sector_name__icontains=s_val) |
+                    Q(employee__branch_structure__sector__name_en__icontains=s_val)
+                )
+
+        # Department Filtering
+        if filter_dept_id and str(filter_dept_id).isdigit():
+            d_id = int(filter_dept_id)
+            active_assignments = active_assignments.filter(
+                Q(branch_structure__department_id=d_id) |
+                Q(employee__branch_structure__department_id=d_id)
+            )
+        elif filter_department and filter_department.strip():
+            d_val = filter_department.strip()
+            if d_val.isdigit():
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__department_id=int(d_val)) |
+                    Q(employee__branch_structure__department_id=int(d_val))
+                )
+            else:
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__department__name__icontains=d_val) |
+                    Q(branch_structure__department__name_en__icontains=d_val) |
+                    Q(employee__branch_structure__department__name__icontains=d_val) |
+                    Q(employee__branch_structure__department__name_en__icontains=d_val)
+                )
+
+        # 4. Global Search Filter
+        if search_query and search_query.strip():
+            term = search_query.strip()
+            active_assignments = active_assignments.filter(
+                Q(asset__serial_number__icontains=term) |
+                Q(asset__brand__icontains=term) |
+                Q(asset__model_or_pn__icontains=term) |
+                Q(employee__employee_code__icontains=term) |
+                Q(employee__name_en__icontains=term) |
+                Q(employee__name_ar__icontains=term) |
+                Q(branch_structure__branch__name_en__icontains=term) |
+                Q(branch_structure__branch__name_ar__icontains=term) |
+                Q(employee__branch_structure__branch__name_en__icontains=term) |
+                Q(employee__branch_structure__branch__name_ar__icontains=term) |
+                Q(asset__computerasset__processor__icontains=term) |
+                Q(asset__computerasset__memory_ram__icontains=term) |
+                Q(asset__computerasset__pc_type__icontains=term) |
+                Q(asset__printerasset__ip_address_eth__icontains=term)
+            )
+
+        active_assignments = active_assignments.distinct().order_by('-assignment_date')
+
+        # 5. Pagination vs Unpaginated Resolution
+        is_filtered = any([
+            search_query, filter_brand, filter_pc_type, 
+            filter_branch, filter_branch_id, 
+            filter_sector, filter_sector_id, 
+            filter_department, filter_dept_id
+        ])
+
+        if export_all or is_filtered:
+            target_assignments = active_assignments
+            page = None
+            paginator = None
+        else:
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(active_assignments, request)
+            target_assignments = page if page is not None else active_assignments
+
+        # 6. Data Construction and Specification Extraction
+        data = []
+        for custody in target_assignments:
+            emp = custody.employee
+            asset = custody.asset
+            cat = asset.category if asset else None
+
+            # Resolve Branch Structure (Explicit Custody Structure vs Employee Structure)
+            struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
+
+            # Structure Name Extraction
+            branch_name = None
+            if struct and getattr(struct, 'branch', None):
+                b = struct.branch
+                branch_name = getattr(b, 'name_en', None) or getattr(b, 'branch_name', None) or getattr(b, 'name_ar', None)
+
+            sector_name = None
+            if struct and getattr(struct, 'sector', None):
+                s = struct.sector
+                sector_name = getattr(s, 'sector_name', None) or getattr(s, 'name_en', None) or getattr(s, 'name', None)
+
+            department_name = None
+            if struct and getattr(struct, 'department', None):
+                d = struct.department
+                department_name = getattr(d, 'name', None) or getattr(d, 'name_en', None) or getattr(d, 'department_name', None)
+
+            # Specification Dictionary Population
+            specs_dict = {}
+            if asset:
+                # Computers / Laptops / PCs
+                comp = getattr(asset, 'computerasset', None) or getattr(asset, 'computer', None)
+                if comp:
+                    specs_dict = {
+                        "spec_type": "computer",
+                        "pc_type": getattr(comp, 'pc_type', None),
+                        "processor": getattr(comp, 'processor', None),
+                        "ram": getattr(comp, 'memory_ram', None),
+                        "hard_disk": getattr(comp, 'hard_disk', None),
+                        "bag_brand": getattr(comp, 'bag_brand', None),
+                        "bag_model_or_description": getattr(comp, 'bag_model_or_description', None),
+                        "keyboard_brand": getattr(comp, 'keyboard_brand', None),
+                        "keyboard_model": getattr(comp, 'keyboard_model', None),
+                        "keyboard_serial": getattr(comp, 'keyboard_serial', None),
+                        "monitor_brand": getattr(comp, 'monitor_brand', None),
+                        "monitor_inches": getattr(comp, 'monitor_inches', None),
+                        "monitor_model": getattr(comp, 'monitor_model', None),
+                        "monitor_serial": getattr(comp, 'monitor_serial', None),
+                        "mouse_brand": getattr(comp, 'mouse_brand', None),
+                        "mouse_model": getattr(comp, 'mouse_model', None),
+                        "mouse_serial": getattr(comp, 'mouse_serial', None),
+                    }
+                # Monitors
+                elif getattr(asset, 'monitorasset', None) or getattr(asset, 'monitor', None):
+                    mon = getattr(asset, 'monitorasset', None) or getattr(asset, 'monitor', None)
+                    specs_dict = {
+                        "spec_type": "monitor",
+                        "inches": getattr(mon, 'inches', None),
+                        "is_meeting_room_tv": getattr(mon, 'is_meeting_room_tv', None),
+                        "is_curved": getattr(mon, 'is_curved', None),
+                        "color": getattr(mon, 'color', None),
+                        "location_details": getattr(mon, 'location_details', None),
+                        "part_number": getattr(mon, 'part_number', None),
+                    }
+                # Printers
+                elif getattr(asset, 'printerasset', None) or getattr(asset, 'printer', None):
+                    ptr = getattr(asset, 'printerasset', None) or getattr(asset, 'printer', None)
+                    specs_dict = {
+                        "spec_type": "printer",
+                        "printer_type": getattr(ptr, 'printer_type', None),
+                        "connection_type": getattr(ptr, 'connection_type', None),
+                        "active_connection": getattr(ptr, 'active_connection', None),
+                        "cartridge_color": getattr(ptr, 'cartridge_color', None),
+                        "cartridge_number": getattr(ptr, 'cartridge_number', None),
+                        "ink_details": getattr(ptr, 'ink_details', None),
+                        "ip_address_eth": getattr(ptr, 'ip_address_eth', None),
+                        "mac_address_eth": getattr(ptr, 'mac_address_eth', None),
+                        "mac_address_wifi": getattr(ptr, 'mac_address_wifi', None),
+                        "multifunctions": getattr(ptr, 'multifunctions', None),
+                        "printer_color": getattr(ptr, 'printer_color', None),
+                        "technology": getattr(ptr, 'technology', None),
+                    }
+                # Tablets
+                elif getattr(asset, 'tabletasset', None) or getattr(asset, 'tablet', None):
+                    tab = getattr(asset, 'tabletasset', None) or getattr(asset, 'tablet', None)
+                    specs_dict = {
+                        "spec_type": "tablet",
+                        "device_item_type": getattr(tab, 'device_item_type', None),
+                        "storage_ram": getattr(tab, 'storage_ram', None),
+                        "screen_color_specs": getattr(tab, 'screen_color_specs', None),
+                    }
+
+            asset_data = {
+                "id": asset.id if asset else None,
+                "serial_number": asset.serial_number if asset else None,
+                "brand": asset.brand if asset else None,
+                "model_or_pn": asset.model_or_pn if asset else None,
+                "status": getattr(asset, 'status', None) if asset else None,
+                "category": {
+                    "id": cat.id if cat else None,
+                    "name_en": getattr(cat, 'name_en', None) if cat else None,
+                    "name_ar": getattr(cat, 'name_ar', None) if cat else None,
+                },
+                "specs": specs_dict
+            }
+
+            data.append({
+                "assignment_id": custody.id,
+                "assignment_date": custody.assignment_date,
+                "notes": custody.notes,
+                "asset_id": asset.id if asset else None,
+                "employee": {
+                    "employee_code": getattr(emp, 'employee_code', None) if emp else None,
+                    "name_en": getattr(emp, 'name_en', None) if emp else None,
+                    "name_ar": getattr(emp, 'name_ar', None) if emp else None,
+                    "structure_id": struct.id if struct else None,
+                    "assignment_type": "employee" if emp else "structure",
+                    "branch_name": branch_name,
+                    "sector_name": sector_name,
+                    "department_name": department_name
+                },
+                "asset": asset_data
+            })
+
+        if page is not None and not export_all:
+            return paginator.get_paginated_response(data)
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )        
+        
+        
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -1081,13 +1400,17 @@ from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
 
+# Ensure ConsumerCustody is imported from your custody models
+# from .models import ConsumerCustody
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_assigned_assets_by_category(request):
     """
-    Function-based API view using global settings.py pagination via PageNumberPagination().
+    Function-based API view supporting standard pagination as well as 
+    unpaginated export downloads via `?all=true`. Returns Category-specific specs.
+    Handles asset status mapping and safely checks model string representations.
     """
-    # 🔒 Authorization Check
     if not request.user.has_perm('custody.view_consumercustody'):
         return Response(
             {"error": "You do not have permission to view assignments by category."}, 
@@ -1095,10 +1418,11 @@ def get_assigned_assets_by_category(request):
         )
 
     category_name = request.query_params.get('name', None)
-    
+    export_all = request.query_params.get('all', 'false').lower() == 'true'
+
     if not category_name:
         return Response(
-            {"error": "Please provide a 'name' parameter (e.g., ?name=pc)"}, 
+            {"error": "Please provide a 'name' parameter (e.g., ?name=Computer)"}, 
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -1108,7 +1432,10 @@ def get_assigned_assets_by_category(request):
             return_date__isnull=True
         ).select_related(
             'asset__category', 
-            'asset__computerasset',  
+            'asset__computerasset',
+            'asset__monitorasset',
+            'asset__printerasset',
+            'asset__tabletasset',
             'employee__branch_structure',
             'branch_structure',
             'branch_structure__branch',
@@ -1122,74 +1449,120 @@ def get_assigned_assets_by_category(request):
             Q(asset__category__name_ar__icontains=category_name)
         ).order_by('-assignment_date')
 
-        # 🌐 Instantiates settings.py global pagination rules
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(active_assignments, request)
-
-        # Slice target evaluation set based on paginated results
-        target_assignments = page if page is not None else active_assignments
+        # Handle unpaginated vs paginated dataset resolution
+        if export_all:
+            target_assignments = active_assignments
+            page = None
+        else:
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(active_assignments, request)
+            target_assignments = page if page is not None else active_assignments
 
         data = []
         for custody in target_assignments:
             emp = custody.employee
             asset = custody.asset
             cat = asset.category if asset else None
-            
+
+            # Resolve structure (either from explicit custody assignment or employee structure)
             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
 
-            # 🏢 Safe Extraction for Structural Names
+            # 1. Branch Name Mapping
             branch_name = None
             if struct and getattr(struct, 'branch', None):
-                branch_name = (
-                    getattr(struct.branch, 'name_en', None) or 
-                    getattr(struct.branch, 'branch_name', None) or 
-                    getattr(struct.branch, 'name', None) or 
-                    str(struct.branch)
-                )
+                b = struct.branch
+                branch_name = getattr(b, 'name_en', None) or getattr(b, 'branch_name', None) or getattr(b, 'name_ar', None)
 
+            # 2. Sector Name Mapping
             sector_name = None
             if struct and getattr(struct, 'sector', None):
-                sector_name = (
-                    getattr(struct.sector, 'name_en', None) or 
-                    getattr(struct.sector, 'sector_name', None) or 
-                    getattr(struct.sector, 'name', None) or 
-                    str(struct.sector)
-                )
+                s = struct.sector
+                sector_name = getattr(s, 'sector_name', None) or getattr(s, 'name_en', None) or getattr(s, 'name', None)
 
+            # 3. Department Name Mapping
             department_name = None
             if struct and getattr(struct, 'department', None):
-                department_name = (
-                    getattr(struct.department, 'name_en', None) or 
-                    getattr(struct.department, 'department_name', None) or 
-                    getattr(struct.department, 'name', None) or 
-                    str(struct.department)
-                )
+                d = struct.department
+                department_name = getattr(d, 'name', None) or getattr(d, 'name_en', None) or getattr(d, 'department_name', None)
+
+            # Category-Specific Specs Extraction
+            specs_dict = {}
+            if asset:
+                # Computers / Laptops / PCs
+                comp = getattr(asset, 'computerasset', None) or getattr(asset, 'computer', None)
+                if comp:
+                    specs_dict = {
+                        "spec_type": "computer",
+                        "pc_type": getattr(comp, 'pc_type', None),
+                        "processor": getattr(comp, 'processor', None),
+                        "ram": getattr(comp, 'memory_ram', None),
+                        "hard_disk": getattr(comp, 'hard_disk', None),
+                        "bag_brand": getattr(comp, 'bag_brand', None),
+                        "bag_model_or_description": getattr(comp, 'bag_model_or_description', None),
+                        "keyboard_brand": getattr(comp, 'keyboard_brand', None),
+                        "keyboard_model": getattr(comp, 'keyboard_model', None),
+                        "keyboard_serial": getattr(comp, 'keyboard_serial', None),
+                        "monitor_brand": getattr(comp, 'monitor_brand', None),
+                        "monitor_inches": getattr(comp, 'monitor_inches', None),
+                        "monitor_model": getattr(comp, 'monitor_model', None),
+                        "monitor_serial": getattr(comp, 'monitor_serial', None),
+                        "mouse_brand": getattr(comp, 'mouse_brand', None),
+                        "mouse_model": getattr(comp, 'mouse_model', None),
+                        "mouse_serial": getattr(comp, 'mouse_serial', None),
+                    }
+                # Monitors
+                elif getattr(asset, 'monitorasset', None) or getattr(asset, 'monitor', None):
+                    mon = getattr(asset, 'monitorasset', None) or getattr(asset, 'monitor', None)
+                    specs_dict = {
+                        "spec_type": "monitor",
+                        "inches": getattr(mon, 'inches', None),
+                        "is_meeting_room_tv": getattr(mon, 'is_meeting_room_tv', None),
+                        "is_curved": getattr(mon, 'is_curved', None),
+                        "color": getattr(mon, 'color', None),
+                        "location_details": getattr(mon, 'location_details', None),
+                        "part_number": getattr(mon, 'part_number', None),
+                    }
+                # Printers
+                elif getattr(asset, 'printerasset', None) or getattr(asset, 'printer', None):
+                    ptr = getattr(asset, 'printerasset', None) or getattr(asset, 'printer', None)
+                    specs_dict = {
+                        "spec_type": "printer",
+                        "printer_type": getattr(ptr, 'printer_type', None),
+                        "connection_type": getattr(ptr, 'connection_type', None),
+                        "active_connection": getattr(ptr, 'active_connection', None),
+                        "cartridge_color": getattr(ptr, 'cartridge_color', None),
+                        "cartridge_number": getattr(ptr, 'cartridge_number', None),
+                        "ink_details": getattr(ptr, 'ink_details', None),
+                        "ip_address_eth": getattr(ptr, 'ip_address_eth', None),
+                        "mac_address_eth": getattr(ptr, 'mac_address_eth', None),
+                        "mac_address_wifi": getattr(ptr, 'mac_address_wifi', None),
+                        "multifunctions": getattr(ptr, 'multifunctions', None),
+                        "printer_color": getattr(ptr, 'printer_color', None),
+                        "technology": getattr(ptr, 'technology', None),
+                    }
+                # Tablets
+                elif getattr(asset, 'tabletasset', None) or getattr(asset, 'tablet', None):
+                    tab = getattr(asset, 'tabletasset', None) or getattr(asset, 'tablet', None)
+                    specs_dict = {
+                        "spec_type": "tablet",
+                        "device_item_type": getattr(tab, 'device_item_type', None),
+                        "storage_ram": getattr(tab, 'storage_ram', None),
+                        "screen_color_specs": getattr(tab, 'screen_color_specs', None),
+                    }
 
             asset_data = {
                 "id": asset.id if asset else None,
                 "serial_number": asset.serial_number if asset else None,
                 "brand": asset.brand if asset else None,
                 "model_or_pn": asset.model_or_pn if asset else None,
-                "status": asset.status if asset else None,
+                "status": getattr(asset, 'status', None) if asset else None,
                 "category": {
                     "id": cat.id if cat else None,
-                    "name_en": cat.name_en if cat else None,
-                    "name_ar": cat.name_ar if cat else None,
-                }
+                    "name_en": getattr(cat, 'name_en', None) if cat else None,
+                    "name_ar": getattr(cat, 'name_ar', None) if cat else None,
+                },
+                "specs": specs_dict
             }
-
-            if cat and cat.name_en and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
-                specs_obj = getattr(asset, 'computerasset', None) or getattr(asset, 'specs', None) or getattr(asset, 'computerspecs', None)
-                
-                if specs_obj:
-                    asset_data["specs"] = {
-                        "processor": getattr(specs_obj, 'processor', None),
-                        "ram": getattr(specs_obj, 'ram', None),
-                        "storage": getattr(specs_obj, 'storage', None),
-                        "os": getattr(specs_obj, 'os', None),
-                    }
-                else:
-                    asset_data["specs"] = "No specs recorded for this computer"
 
             data.append({
                 "assignment_id": custody.id,
@@ -1197,9 +1570,9 @@ def get_assigned_assets_by_category(request):
                 "notes": custody.notes,
                 "asset_id": asset.id if asset else None,
                 "employee": {
-                    "employee_code": emp.employee_code if emp else None,
-                    "name_en": emp.name_en if emp else None,
-                    "name_ar": emp.name_ar if emp else None,
+                    "employee_code": getattr(emp, 'employee_code', None) if emp else None,
+                    "name_en": getattr(emp, 'name_en', None) if emp else None,
+                    "name_ar": getattr(emp, 'name_ar', None) if emp else None,
                     "structure_id": struct.id if struct else None,
                     "assignment_type": "employee" if emp else "structure",
                     "branch_name": branch_name,
@@ -1209,8 +1582,7 @@ def get_assigned_assets_by_category(request):
                 "asset": asset_data
             })
 
-        # Return global pagination JSON structure if paginated
-        if page is not None:
+        if page is not None and not export_all:
             return paginator.get_paginated_response(data)
 
         return Response(data, status=status.HTTP_200_OK)
@@ -1220,7 +1592,9 @@ def get_assigned_assets_by_category(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
+        
+        
+                
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_custody_by_serial(request, serial_number):
@@ -1309,7 +1683,276 @@ def get_custody_by_serial(request, serial_number):
         "device_details": device_details
     }, status=status.HTTP_200_OK)
     
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_assigned_assets_by_category_all(request):
+    """
+    Function-based API view:
+    - Supports global search (`search`) across assets, employees, specs, and structures.
+    - Supports explicit dropdown filters via string names or numeric IDs (brand, pc_type, branch/branch_id, sector/sector_id, department/department_id).
+    - Disables pagination if `search` or any dropdown filter is active.
+    """
+    if not request.user.has_perm('custody.view_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to view assignments by category."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    category_name = request.query_params.get('name', None)
+    search_query = request.query_params.get('search', None)
     
+    # Dropdown Filter Parameters
+    filter_brand = request.query_params.get('brand', None)
+    filter_pc_type = request.query_params.get('pc_type', None)
+    
+    # Support both String names & Numeric IDs
+    filter_branch = request.query_params.get('branch', None)
+    filter_branch_id = request.query_params.get('branch_id', None)
+    
+    filter_sector = request.query_params.get('sector', None)
+    filter_sector_id = request.query_params.get('sector_id', None)
+    
+    filter_department = request.query_params.get('department', None)
+    filter_dept_id = request.query_params.get('department_id', None)
+    
+    if not category_name:
+        return Response(
+            {"error": "Please provide a 'name' parameter (e.g., ?name=pc)"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        active_assignments = ConsumerCustody.objects.filter(
+            action_type='issue',
+            return_date__isnull=True
+        ).select_related(
+            'asset__category', 
+            'asset__computerasset',  
+            'employee__branch_structure',
+            'branch_structure',
+            'branch_structure__branch',
+            'branch_structure__sector',
+            'branch_structure__department',
+            'employee__branch_structure__branch',
+            'employee__branch_structure__sector',
+            'employee__branch_structure__department'
+        ).filter(
+            Q(asset__category__name_en__icontains=category_name) | 
+            Q(asset__category__name_ar__icontains=category_name)
+        )
+
+        # 🎯 1. Structured Dropdown Filters
+
+        # Brand Filter
+        if filter_brand and filter_brand.strip():
+            active_assignments = active_assignments.filter(asset__brand__iexact=filter_brand.strip())
+
+        # PC Type Filter
+        if filter_pc_type and filter_pc_type.strip():
+            active_assignments = active_assignments.filter(asset__computerasset__pc_type__iexact=filter_pc_type.strip())
+
+        # Branch Filter (Handles IDs & String Names safely)
+        if filter_branch_id and str(filter_branch_id).isdigit():
+            b_id = int(filter_branch_id)
+            active_assignments = active_assignments.filter(
+                Q(branch_structure__branch_id=b_id) |
+                Q(employee__branch_structure__branch_id=b_id)
+            )
+        elif filter_branch and filter_branch.strip():
+            b_val = filter_branch.strip()
+            if b_val.isdigit():
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__branch_id=int(b_val)) |
+                    Q(employee__branch_structure__branch_id=int(b_val))
+                )
+            else:
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__branch__name_en__icontains=b_val) |
+                    Q(branch_structure__branch__name_ar__icontains=b_val) |
+                    Q(employee__branch_structure__branch__name_en__icontains=b_val) |
+                    Q(employee__branch_structure__branch__name_ar__icontains=b_val)
+                )
+
+        # Sector Filter (Handles IDs & String Names safely)
+        if filter_sector_id and str(filter_sector_id).isdigit():
+            s_id = int(filter_sector_id)
+            active_assignments = active_assignments.filter(
+                Q(branch_structure__sector_id=s_id) |
+                Q(employee__branch_structure__sector_id=s_id)
+            )
+        elif filter_sector and filter_sector.strip():
+            s_val = filter_sector.strip()
+            if s_val.isdigit():
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__sector_id=int(s_val)) |
+                    Q(employee__branch_structure__sector_id=int(s_val))
+                )
+            else:
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__sector__name_en__icontains=s_val) |
+                    Q(branch_structure__sector__name_ar__icontains=s_val) |
+                    Q(employee__branch_structure__sector__name_en__icontains=s_val) |
+                    Q(employee__branch_structure__sector__name_ar__icontains=s_val)
+                )
+
+        # Department Filter (Handles IDs & String Names safely)
+        if filter_dept_id and str(filter_dept_id).isdigit():
+            d_id = int(filter_dept_id)
+            active_assignments = active_assignments.filter(
+                Q(branch_structure__department_id=d_id) |
+                Q(employee__branch_structure__department_id=d_id)
+            )
+        elif filter_department and filter_department.strip():
+            d_val = filter_department.strip()
+            if d_val.isdigit():
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__department_id=int(d_val)) |
+                    Q(employee__branch_structure__department_id=int(d_val))
+                )
+            else:
+                active_assignments = active_assignments.filter(
+                    Q(branch_structure__department__name_en__icontains=d_val) |
+                    Q(branch_structure__department__name_ar__icontains=d_val) |
+                    Q(employee__branch_structure__department__name_en__icontains=d_val) |
+                    Q(employee__branch_structure__department__name_ar__icontains=d_val)
+                )
+
+        # 🔍 2. Free-text Search Filter
+        if search_query and search_query.strip():
+            search_term = search_query.strip()
+            active_assignments = active_assignments.filter(
+                Q(asset__serial_number__icontains=search_term) |
+                Q(asset__brand__icontains=search_term) |
+                Q(asset__model_or_pn__icontains=search_term) |
+                Q(employee__employee_code__icontains=search_term) |
+                Q(employee__name_en__icontains=search_term) |
+                Q(employee__name_ar__icontains=search_term) |
+                Q(branch_structure__branch__name_en__icontains=search_term) |
+                Q(branch_structure__branch__name_ar__icontains=search_term) |
+                Q(employee__branch_structure__branch__name_en__icontains=search_term) |
+                Q(employee__branch_structure__branch__name_ar__icontains=search_term) |
+                Q(asset__computerasset__processor__icontains=search_term) |
+                Q(asset__computerasset__memory_ram__icontains=search_term) |
+                Q(asset__computerasset__hard_disk__icontains=search_term) |
+                Q(asset__computerasset__pc_type__icontains=search_term)
+            )
+
+        active_assignments = active_assignments.distinct().order_by('-assignment_date')
+
+        # 🌐 3. Pagination Logic (Only paginate if NO search and NO filters are active)
+        is_filtered = any([
+            search_query, 
+            filter_brand, 
+            filter_pc_type, 
+            filter_branch,
+            filter_branch_id,
+            filter_sector,
+            filter_sector_id,
+            filter_department,
+            filter_dept_id
+        ])
+
+        page = None
+        paginator = None
+
+        if not is_filtered:
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(active_assignments, request)
+
+        target_assignments = page if page is not None else active_assignments
+
+        # 📦 4. Response Data Serialization
+        data = []
+        for custody in target_assignments:
+            emp = custody.employee
+            asset = custody.asset
+            cat = asset.category if asset else None
+            
+            struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
+
+            branch_name = None
+            if struct and getattr(struct, 'branch', None):
+                branch_name = (
+                    getattr(struct.branch, 'name_en', None) or 
+                    getattr(struct.branch, 'branch_name', None) or 
+                    getattr(struct.branch, 'name', None) or 
+                    str(struct.branch)
+                )
+
+            sector_name = None
+            if struct and getattr(struct, 'sector', None):
+                sector_name = (
+                    getattr(struct.sector, 'name_en', None) or 
+                    getattr(struct.sector, 'sector_name', None) or 
+                    getattr(struct.sector, 'name', None) or 
+                    str(struct.sector)
+                )
+
+            department_name = None
+            if struct and getattr(struct, 'department', None):
+                department_name = (
+                    getattr(struct.department, 'name_en', None) or 
+                    getattr(struct.department, 'department_name', None) or 
+                    getattr(struct.department, 'name', None) or 
+                    str(struct.department)
+                )
+
+            asset_data = {
+                "id": asset.id if asset else None,
+                "serial_number": asset.serial_number if asset else None,
+                "brand": asset.brand if asset else None,
+                "model_or_pn": asset.model_or_pn if asset else None,
+                "status": asset.status if asset else None,
+                "category": {
+                    "id": cat.id if cat else None,
+                    "name_en": cat.name_en if cat else None,
+                    "name_ar": cat.name_ar if cat else None,
+                }
+            }
+
+            if cat and cat.name_en and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
+                specs_obj = getattr(asset, 'computerasset', None)
+                
+                if specs_obj:
+                    asset_data["specs"] = {
+                        "processor": getattr(specs_obj, 'processor', None),
+                        "ram": getattr(specs_obj, 'memory_ram', None),
+                        "storage": getattr(specs_obj, 'hard_disk', None),
+                        "pc_type": getattr(specs_obj, 'pc_type', None),
+                    }
+                else:
+                    asset_data["specs"] = "No specs recorded for this computer"
+
+            data.append({
+                "assignment_id": custody.id,
+                "assignment_date": custody.assignment_date,
+                "notes": custody.notes,
+                "asset_id": asset.id if asset else None,
+                "employee": {
+                    "employee_code": emp.employee_code if emp else None,
+                    "name_en": emp.name_en if emp else None,
+                    "name_ar": emp.name_ar if emp else None,
+                    "structure_id": struct.id if struct else None,
+                    "assignment_type": "employee" if emp else "structure",
+                    "branch_name": branch_name,
+                    "sector_name": sector_name,
+                    "department_name": department_name
+                },
+                "asset": asset_data
+            })
+
+        if page is not None and paginator is not None:
+            return paginator.get_paginated_response(data)
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_assignments_by_employee_code(request, emp_code):

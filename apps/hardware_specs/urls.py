@@ -21,7 +21,7 @@ urlpatterns = [
     
     # 3️⃣ مسارات مواصفات الكمبيوتر واللاب توب (Computers CRUD)
     path('computers/', views.computer_list, name='computer_list'),
-    # path('computers/<int:pk>/', views.computer_detail, name='computer_detail'),
+    path('computers/<int:pk>/', views.computer_detail, name='computer_detail'),
     # المسار الخاص بجلب الأجهزة بناءً على النوع (laptop / desktop)
     path('computers/type/<str:pc_type>/', views.computer_list_by_type, name='computer_list_by_type'),
     

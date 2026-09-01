@@ -24,9 +24,19 @@ urlpatterns = [
     
     path('assignments/active/', views.get_all_active_assignments, name='get-all-active-assignments'),
     path('assets/by-category/', views.get_assigned_assets_by_category, name='get_assigned_assets_by_category'),
+    path(
+        'assets/by-category/all/', 
+        views.get_assigned_assets_by_category_all, 
+        name='get-assigned-assets-by-category'
+    ),
+
     path('assignments/active-count/', views.get_assigned_assets_count, name='get-assigned-assets-count'),
     
     path('assignments/employee/<str:emp_code>/', views.get_assignments_by_employee_code, name='emp_assignments'),
 
-
+    path(
+    'assets/filter-search/', 
+    views.get_filtered_and_searched_assets_in_custody, 
+    name='get-filtered-searched-assets'
+),
 ]

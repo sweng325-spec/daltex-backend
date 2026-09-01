@@ -3,9 +3,39 @@ from .models import BaseAsset, ComputerAsset, PrinterAsset, TabletAsset, Monitor
 
 # 1️⃣ الـ Serializers الخاصة بالموديلات المورثة (Polymorphic Specs)
 class ComputerSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source='category.name_en', read_only=True)
+
     class Meta:
         model = ComputerAsset
-        fields = '__all__'
+        fields = [
+            # BaseAsset Inherited Fields
+            'id',
+            'brand',
+            'model_or_pn',
+            'serial_number',
+            'description',
+            'category_name',
+            
+            # Computer Specifications
+            'pc_type',
+            'processor',
+            'memory_ram',
+            'hard_disk',
+            
+            # Peripherals
+            'monitor_brand',
+            'monitor_model',
+            'monitor_inches',
+            'monitor_serial',
+            'keyboard_brand',
+            'keyboard_model',
+            'keyboard_serial',
+            'mouse_brand',
+            'mouse_model',
+            'mouse_serial',
+            'bag_brand',
+            'bag_model_or_description',
+        ]
 
 class PrinterSerializer(serializers.ModelSerializer):
     class Meta:
