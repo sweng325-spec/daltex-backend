@@ -122,7 +122,8 @@ class ComputerAsset(BaseAsset):
 class PrinterAsset(BaseAsset):
     
 
-    multifunctions = models.CharField(max_length=100, blank=True, null=True, verbose_name="Multifunctions (e.g., All In One)")
+# models.py
+    multifunctions = models.BooleanField(default=False, verbose_name="Multifunctions (e.g., All In One)")
     printer_type = models.CharField(max_length=100, blank=True, null=True, verbose_name="Printer Type (e.g., Color/Mono)")
     printer_color = models.CharField(max_length=50, blank=True, null=True, verbose_name="Printer Body Color")
     connection_type = models.CharField(max_length=150, blank=True, null=True, verbose_name="Supported Connections (e.g., Ethernet-WiFi-USB)")

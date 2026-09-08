@@ -73,8 +73,9 @@ def hardware_asset_list(request):
         ).order_by('-id')
 
         # Extract query parameters
+        asset_id = request.query_params.get('asset_id')
         category_id = request.query_params.get('category_id')
-        category_name = request.query_params.get('category')
+        category_name = request.query_params.get('category') or request.query_params.get('name')
         asset_status = request.query_params.get('status')
         search_query = request.query_params.get('search')
         
@@ -83,67 +84,97 @@ def hardware_asset_list(request):
         sector = request.query_params.get('sector')
         department = request.query_params.get('department')
 
-        # 1. Category Filter
+        # 1. Direct Asset ID Filter
+        if asset_id and str(asset_id).strip():
+            aid = str(asset_id).strip()
+            if aid.isdigit():
+                assets = assets.filter(id=int(aid))
+            else:
+                assets = assets.filter(id__icontains=aid)
+
+        # 2. Category Filter
         if category_id:
             assets = assets.filter(category_id=category_id)
-        elif category_name:
+        elif category_name and category_name.strip():
+            cat_val = category_name.strip()
             assets = assets.filter(
-                Q(category__name_en__icontains=category_name) | 
-                Q(category__name_ar__icontains=category_name)
+                Q(category__name_en__icontains=cat_val) | 
+                Q(category__name_ar__icontains=cat_val)
             )
 
-        # 2. Asset Status Filter
-        if asset_status:
-            assets = assets.filter(status__iexact=asset_status)
+        # 3. Asset Status Filter (Normalizes "In Stock", "in_stock", "Assigned", etc.)
+        if asset_status and asset_status.strip():
+            normalized_status = asset_status.strip().lower().replace(' ', '_')
+            
+            # Map human-readable dropdown strings to BaseAsset.STATUS_CHOICES keys
+            status_mappings = {
+                'in_stock': 'in_stock',
+                'assigned': 'assigned',
+                'maintenance': 'maintenance',
+                'repair': 'maintenance',
+                'scrapped': 'scrapped',
+                'disposed': 'scrapped',
+            }
+            
+            target_status = status_mappings.get(normalized_status, normalized_status)
+            
+            # Exclude filtering if 'all' or 'all_statuses' is selected
+            if target_status not in ['all', 'all_statuses', '']:
+                assets = assets.filter(status__iexact=target_status)
 
-        # 3. Branch Filter (Matches Branch.name_en or Branch.name_ar)
-        if branch:
+        # 4. Branch Filter (Matches Branch.name_en or Branch.name_ar)
+        if branch and branch.strip():
+            branch_val = branch.strip()
             assets = assets.filter(
-                Q(custody_history__employee__branch_structure__branch__name_en__iexact=branch) |
-                Q(custody_history__employee__branch_structure__branch__name_ar__iexact=branch) |
-                Q(custody_history__branch_structure__branch__name_en__iexact=branch) |
-                Q(custody_history__branch_structure__branch__name_ar__iexact=branch)
+                Q(custody_history__employee__branch_structure__branch__name_en__iexact=branch_val) |
+                Q(custody_history__employee__branch_structure__branch__name_ar__iexact=branch_val) |
+                Q(custody_history__branch_structure__branch__name_en__iexact=branch_val) |
+                Q(custody_history__branch_structure__branch__name_ar__iexact=branch_val)
             ).distinct()
 
-        # 4. Sector Filter (Matches Sector.sector_name)
-        if sector:
+        # 5. Sector Filter (Matches Sector.sector_name)
+        if sector and sector.strip():
+            sector_val = sector.strip()
             assets = assets.filter(
-                Q(custody_history__employee__branch_structure__sector__sector_name__iexact=sector) |
-                Q(custody_history__branch_structure__sector__sector_name__iexact=sector)
+                Q(custody_history__employee__branch_structure__sector__sector_name__iexact=sector_val) |
+                Q(custody_history__branch_structure__sector__sector_name__iexact=sector_val)
             ).distinct()
 
-        # 5. Department Filter (Matches Department.name)
-        if department:
+        # 6. Department Filter (Matches Department.name)
+        if department and department.strip():
+            dept_val = department.strip()
             assets = assets.filter(
-                Q(custody_history__employee__branch_structure__department__name__iexact=department) |
-                Q(custody_history__branch_structure__department__name__iexact=department)
+                Q(custody_history__employee__branch_structure__department__name__iexact=dept_val) |
+                Q(custody_history__branch_structure__department__name__iexact=dept_val)
             ).distinct()
 
-        # 6. Comprehensive Global Search (Asset ID, Serial Number, Brand, Model, Customer/Employee Name)
-        if search_query:
-            search_query = search_query.strip()
+        # 7. Comprehensive Global Search (Asset ID, Serial Number, Brand, Model, Customer/Employee Name)
+        if search_query and search_query.strip():
+            term = search_query.strip()
             
             search_filter = (
-                Q(serial_number__icontains=search_query) |
-                Q(brand__icontains=search_query) |
-                Q(model_or_pn__icontains=search_query) |
-                Q(computerasset__processor__icontains=search_query) |
-                Q(computerasset__pc_type__icontains=search_query) |
+                Q(serial_number__icontains=term) |
+                Q(brand__icontains=term) |
+                Q(model_or_pn__icontains=term) |
+                Q(computerasset__processor__icontains=term) |
+                Q(computerasset__pc_type__icontains=term) |
                 # Searches employee name on custody assignments (both EN and AR fields)
-                Q(custody_history__employee__name_en__icontains=search_query) |
-                Q(custody_history__employee__name_ar__icontains=search_query) |
-                Q(custody_history__employee__full_name__icontains=search_query)
+                Q(custody_history__employee__name_en__icontains=term) |
+                Q(custody_history__employee__name_ar__icontains=term) |
+                Q(custody_history__employee__full_name__icontains=term)
             )
 
-            # Match exact Asset ID if input is numeric
-            if search_query.isdigit():
-                search_filter |= Q(id=int(search_query))
+            # Match exact or partial Asset ID in global search
+            if term.isdigit():
+                search_filter |= Q(id=int(term))
+            else:
+                search_filter |= Q(id__icontains=term)
 
             assets = assets.filter(search_filter).distinct()
 
         # Check if any search or filter conditions are active
         has_filter_or_search = any([
-            category_id, category_name, asset_status, search_query, branch, sector, department
+            asset_id, category_id, category_name, asset_status, search_query, branch, sector, department
         ])
 
         # Bypass pagination on active search/filters or explicit page_size=0
@@ -167,6 +198,7 @@ def hardware_asset_list(request):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def maintenance_assets_by_category(request):

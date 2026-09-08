@@ -38,7 +38,8 @@ def add_new_employee(request):
         sector_id = request.data.get('sector_id')
         department_id = request.data.get('department_id')
         branch_structure_id = request.data.get('branch_structure_id')
-
+        print("emp_code",emp_code)
+        print("name_ar",name_ar)
         if not emp_code or not name_ar:
             return Response({"error": "employee_code and employee_name_ar are required fields."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1218,10 +1219,11 @@ def get_filtered_and_searched_assets_in_custody(request):
                     Q(employee__branch_structure__department__name_en__icontains=d_val)
                 )
 
-        # 4. Global Search Filter
+        # 4. Global Search Filter (Updated with Asset ID support)
         if search_query and search_query.strip():
             term = search_query.strip()
-            active_assignments = active_assignments.filter(
+            
+            search_conditions = Q(
                 Q(asset__serial_number__icontains=term) |
                 Q(asset__brand__icontains=term) |
                 Q(asset__model_or_pn__icontains=term) |
@@ -1237,6 +1239,14 @@ def get_filtered_and_searched_assets_in_custody(request):
                 Q(asset__computerasset__pc_type__icontains=term) |
                 Q(asset__printerasset__ip_address_eth__icontains=term)
             )
+
+            # Include asset ID in search
+            if term.isdigit():
+                search_conditions |= Q(asset__id=int(term))
+            else:
+                search_conditions |= Q(asset__id__icontains=term)
+
+            active_assignments = active_assignments.filter(search_conditions)
 
         active_assignments = active_assignments.distinct().order_by('-assignment_date')
 
@@ -1389,8 +1399,7 @@ def get_filtered_and_searched_assets_in_custody(request):
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )        
-        
+        )       
         
 
 from rest_framework.decorators import api_view, permission_classes
