@@ -56,7 +56,11 @@ class BaseAsset(models.Model):
         ("maintenance", "In Maintenance (في الصيانة)"),
         ("scrapped", "Scrapped / Disposed (مكهن)"),
     ]
-
+    asset_code = models.CharField(
+        max_length=50,
+        primary_key=True,
+        verbose_name='Asset Code'
+    )
     category = models.ForeignKey(
         AssetCategory, on_delete=models.PROTECT, related_name="assets"
     )
@@ -123,7 +127,7 @@ class PrinterAsset(BaseAsset):
     
 
 # models.py
-    multifunctions = models.BooleanField(default=False, verbose_name="Multifunctions (e.g., All In One)")
+    multifunctions = models.BooleanField(default=False, verbose_name="Multifunctions (e.g., All In One)",blank=True, null=True)
     printer_type = models.CharField(max_length=100, blank=True, null=True, verbose_name="Printer Type (e.g., Color/Mono)")
     printer_color = models.CharField(max_length=50, blank=True, null=True, verbose_name="Printer Body Color")
     connection_type = models.CharField(max_length=150, blank=True, null=True, verbose_name="Supported Connections (e.g., Ethernet-WiFi-USB)")
@@ -152,9 +156,9 @@ class MonitorAsset(BaseAsset):
     color = models.CharField(max_length=50, blank=True, null=True, verbose_name="Color")
 
     is_meeting_room_tv = models.BooleanField(
-        default=False, verbose_name="Is Greater than 70 inch / Meeting Room TV"
+        default=False, verbose_name="Is Greater than 70 inch / Meeting Room TV",blank=True, null=True
     )
-    is_curved = models.BooleanField(default=False, verbose_name="Is Curved Screen")
+    is_curved = models.BooleanField(default=False, verbose_name="Is Curved Screen",blank=True, null=True)
 
     class Meta:
         db_table = "asset_monitors"
@@ -188,7 +192,7 @@ class NetworkDeviceAsset(BaseAsset):
 
 class TabletAsset(BaseAsset):
     
-    device_item_type = models.CharField(max_length=50, verbose_name="Item Type (e.g., Tablet/Ipad)")
+    device_item_type = models.CharField(max_length=50, verbose_name="Item Type (e.g., Tablet/Ipad)",blank=True, null=True)
     storage_ram = models.CharField(max_length=100, blank=True, null=True, verbose_name="Storage & RAM Specs")
     screen_color_specs = models.CharField(max_length=150, blank=True, null=True, verbose_name="Color & Screen Specs")
 

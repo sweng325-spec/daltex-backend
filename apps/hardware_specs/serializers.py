@@ -8,8 +8,7 @@ class ComputerSerializer(serializers.ModelSerializer):
     class Meta:
         model = ComputerAsset
         fields = [
-            # BaseAsset Inherited Fields
-            'id',
+            'asset_code',
             'brand',
             'model_or_pn',
             'serial_number',
@@ -22,7 +21,7 @@ class ComputerSerializer(serializers.ModelSerializer):
             'memory_ram',
             'hard_disk',
             
-            # Peripherals
+            # Peripherals Saved in asset_computers
             'monitor_brand',
             'monitor_model',
             'monitor_inches',
@@ -36,7 +35,6 @@ class ComputerSerializer(serializers.ModelSerializer):
             'bag_brand',
             'bag_model_or_description',
         ]
-
 class PrinterSerializer(serializers.ModelSerializer):
     class Meta:
         model = PrinterAsset
@@ -62,15 +60,13 @@ class BaseAssetSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def validate_serial_number(self, value):
-        """ضمان أن السيريال نمبر فريد، وحفظه دائماً بالحروف الكبيرة (Uppercase)"""
-        # 🛠️ تصحيح: إزالة toUpperCase() الخاصة بـ JavaScript واستخدام ميثود بايثون النظيفة .upper()
+        """Ensure serial number is unique and stored uppercase."""
         normalized = value.strip().upper()
         
-        instance_id = self.instance.id if self.instance else None
-        if BaseAsset.objects.filter(serial_number=normalized).exclude(id=instance_id).exists():
+        instance_code = self.instance.asset_code if self.instance else None
+        if BaseAsset.objects.filter(serial_number=normalized).exclude(asset_code=instance_code).exists():
             raise serializers.ValidationError("A device with this serial number already exists.")
         return normalized
-
 
 # 3️⃣ الـ Serializer المجمع والمسطح لعرض الجدول بالكامل في الـ React
 class BaseAssetFlatSerializer(serializers.ModelSerializer):
@@ -81,7 +77,7 @@ class BaseAssetFlatSerializer(serializers.ModelSerializer):
     class Meta:
         model = BaseAsset
         fields = [
-            'id', 'serial_number', 'brand', 'model_or_pn', 'status', 
+            'asset_code', 'serial_number', 'brand', 'model_or_pn', 'status', 
             'description', 'category_name', 'current_custody', 'specs'
         ]
 

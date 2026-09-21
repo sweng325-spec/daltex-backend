@@ -6,10 +6,11 @@ class Branch(models.Model):
     name_en = models.CharField(max_length=255, db_index=True)  # e.g., Headquarter, ElMohandseen
     name_ar = models.CharField(max_length=255, blank=True, null=True)  # 🌟 تم تعديله لـ name_an ليتطابق مع الـ Serializer
     location = models.CharField(max_length=255, blank=True, null=True)
+    sub_location = models.CharField(max_length=255, blank=True, null=True)
     branch_code = models.CharField(max_length=255, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
-
+ 
     class Meta:
         db_table = 'branches'
         verbose_name_plural = "Branches"

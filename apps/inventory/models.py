@@ -113,6 +113,10 @@ class InventoryTransactionLog(models.Model):
     
     notes = models.TextField(blank=True, null=True, verbose_name="Reason / Transaction Details")
     created_at = models.DateTimeField(auto_now_add=True)
+    consumer = models.CharField(blank=True, null=True,)
+    branch = models.CharField(blank=True, null=True,)
+    sector = models.CharField(blank=True, null=True,)
+    department = models.CharField(blank=True, null=True,)
 
     class Meta:
         db_table = "inventory_transaction_logs"

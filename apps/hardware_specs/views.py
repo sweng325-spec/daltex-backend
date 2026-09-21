@@ -70,10 +70,10 @@ def hardware_asset_list(request):
             'custody_history__branch_structure__branch',
             'custody_history__branch_structure__sector',
             'custody_history__branch_structure__department'
-        ).order_by('-id')
+        ).order_by('-created_at')
 
         # Extract query parameters
-        asset_id = request.query_params.get('asset_id')
+        asset_id = request.query_params.get('asset_id') or request.query_params.get('asset_code')
         category_id = request.query_params.get('category_id')
         category_name = request.query_params.get('category') or request.query_params.get('name')
         asset_status = request.query_params.get('status')
@@ -84,13 +84,10 @@ def hardware_asset_list(request):
         sector = request.query_params.get('sector')
         department = request.query_params.get('department')
 
-        # 1. Direct Asset ID Filter
+        # 1. Direct Asset Code Filter
         if asset_id and str(asset_id).strip():
             aid = str(asset_id).strip()
-            if aid.isdigit():
-                assets = assets.filter(id=int(aid))
-            else:
-                assets = assets.filter(id__icontains=aid)
+            assets = assets.filter(asset_code__icontains=aid)
 
         # 2. Category Filter
         if category_id:
@@ -102,11 +99,10 @@ def hardware_asset_list(request):
                 Q(category__name_ar__icontains=cat_val)
             )
 
-        # 3. Asset Status Filter (Normalizes "In Stock", "in_stock", "Assigned", etc.)
+        # 3. Asset Status Filter
         if asset_status and asset_status.strip():
             normalized_status = asset_status.strip().lower().replace(' ', '_')
             
-            # Map human-readable dropdown strings to BaseAsset.STATUS_CHOICES keys
             status_mappings = {
                 'in_stock': 'in_stock',
                 'assigned': 'assigned',
@@ -118,11 +114,10 @@ def hardware_asset_list(request):
             
             target_status = status_mappings.get(normalized_status, normalized_status)
             
-            # Exclude filtering if 'all' or 'all_statuses' is selected
             if target_status not in ['all', 'all_statuses', '']:
                 assets = assets.filter(status__iexact=target_status)
 
-        # 4. Branch Filter (Matches Branch.name_en or Branch.name_ar)
+        # 4. Branch Filter
         if branch and branch.strip():
             branch_val = branch.strip()
             assets = assets.filter(
@@ -132,7 +127,7 @@ def hardware_asset_list(request):
                 Q(custody_history__branch_structure__branch__name_ar__iexact=branch_val)
             ).distinct()
 
-        # 5. Sector Filter (Matches Sector.sector_name)
+        # 5. Sector Filter
         if sector and sector.strip():
             sector_val = sector.strip()
             assets = assets.filter(
@@ -140,7 +135,7 @@ def hardware_asset_list(request):
                 Q(custody_history__branch_structure__sector__sector_name__iexact=sector_val)
             ).distinct()
 
-        # 6. Department Filter (Matches Department.name)
+        # 6. Department Filter
         if department and department.strip():
             dept_val = department.strip()
             assets = assets.filter(
@@ -148,27 +143,21 @@ def hardware_asset_list(request):
                 Q(custody_history__branch_structure__department__name__iexact=dept_val)
             ).distinct()
 
-        # 7. Comprehensive Global Search (Asset ID, Serial Number, Brand, Model, Customer/Employee Name)
+        # 7. Comprehensive Global Search
         if search_query and search_query.strip():
             term = search_query.strip()
             
             search_filter = (
+                Q(asset_code__icontains=term) |
                 Q(serial_number__icontains=term) |
                 Q(brand__icontains=term) |
                 Q(model_or_pn__icontains=term) |
                 Q(computerasset__processor__icontains=term) |
                 Q(computerasset__pc_type__icontains=term) |
-                # Searches employee name on custody assignments (both EN and AR fields)
                 Q(custody_history__employee__name_en__icontains=term) |
                 Q(custody_history__employee__name_ar__icontains=term) |
                 Q(custody_history__employee__full_name__icontains=term)
             )
-
-            # Match exact or partial Asset ID in global search
-            if term.isdigit():
-                search_filter |= Q(id=int(term))
-            else:
-                search_filter |= Q(id__icontains=term)
 
             assets = assets.filter(search_filter).distinct()
 
@@ -197,16 +186,12 @@ def hardware_asset_list(request):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)  
+
     
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def maintenance_assets_by_category(request):
-    """
-    API view to return all hardware assets with status='maintenance',
-    filtered dynamically by an English category name query parameter.
-    """
-    # 🔒 Authorization Check
     if not request.user.has_perm('hardware_specs.view_baseasset'):
         return Response(
             {"error": "You do not have permission to view maintenance assets."}, 
@@ -221,7 +206,6 @@ def maintenance_assets_by_category(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # 1. 🚀 Query Optimization
     queryset = BaseAsset.objects.filter(status='maintenance').select_related(
         'category', 'computerasset', 'printerasset', 'tabletasset', 'monitorasset'
     ).prefetch_related(
@@ -230,12 +214,12 @@ def maintenance_assets_by_category(request):
         'custody_history__employee__branch_structure__department'
     )
 
-    # 2. 🔍 FIXED LOOKUP: Targeting 'name_en' using double underscores
-    queryset = queryset.filter(category__name_en__iexact=category_param).order_by('-id')
+    queryset = queryset.filter(category__name_en__iexact=category_param).order_by('-created_at')
 
-    # 3. Serialize and return
     serializer = BaseAssetFlatSerializer(queryset, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 
 
 @api_view(['GET'])
@@ -266,12 +250,11 @@ def hardware_asset_instock_count(request):
 @permission_classes([IsAuthenticated])
 def hardware_asset_detail(request, pk):
     try:
-        asset = BaseAsset.objects.get(pk=pk)
+        asset = BaseAsset.objects.get(asset_code=pk)
     except BaseAsset.DoesNotExist:
         return Response({'error': 'Asset not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
-        # 🔒 Authorization Check
         if not request.user.has_perm('hardware_specs.view_baseasset'):
             return Response(
                 {"error": "You do not have permission to view this asset's details."}, 
@@ -282,7 +265,6 @@ def hardware_asset_detail(request, pk):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     elif request.method == 'PUT':
-        # 🔒 Authorization Check
         if not request.user.has_perm('hardware_specs.change_baseasset'):
             return Response(
                 {"error": "You do not have permission to update this asset."}, 
@@ -296,7 +278,6 @@ def hardware_asset_detail(request, pk):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == 'DELETE':
-        # 🔒 Authorization Check
         if not request.user.has_perm('hardware_specs.delete_baseasset'):
             return Response(
                 {"error": "You do not have permission to delete this asset."}, 
@@ -305,7 +286,6 @@ def hardware_asset_detail(request, pk):
 
         asset.delete()
         return Response({'message': 'Asset deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-
 
 # =====================================================================
 # 2. عمليات الطابعات (Printers CRUD)
@@ -436,6 +416,7 @@ def computer_list(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     # ------------------------------------------------------------------
     # GET: List & Search ComputerAssets
     # ------------------------------------------------------------------
@@ -451,7 +432,7 @@ def computer_list(request):
     queryset = ComputerAsset.objects.select_related('category')
 
     if search_query:
-        queryset = queryset.filter(
+        search_conditions = (
             Q(brand__icontains=search_query) |
             Q(model_or_pn__icontains=search_query) |
             Q(serial_number__icontains=search_query) |
@@ -459,8 +440,15 @@ def computer_list(request):
             Q(memory_ram__icontains=search_query) |
             Q(hard_disk__icontains=search_query)
         )
+        if search_query.isdigit():
+            search_conditions |= Q(asset_code=int(search_query))
+        else:
+            search_conditions |= Q(asset_code__icontains=search_query)
 
-    queryset = queryset.order_by('-id')
+        queryset = queryset.filter(search_conditions)
+
+    # Updated ordering from '-id' to '-asset_code'
+    queryset = queryset.order_by('-asset_code')
 
     # Bypass pagination when searching or when page_size=0 is passed
     if search_query or page_size == '0':
@@ -474,65 +462,59 @@ def computer_list(request):
     return paginator.get_paginated_response(serializer.data)
 
 
-@api_view(['GET', 'PUT', 'DELETE'])
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def computer_detail(request, pk):
     """
-    Retrieve, update, or delete a single ComputerAsset by baseasset_ptr_id.
+    Retrieve, update (full or partial PATCH), or delete a ComputerAsset using asset_code.
+    Saves attached peripherals directly into the 'asset_computers' table.
     """
     try:
-        computer = ComputerAsset.objects.get(baseasset_ptr_id=pk)
+        computer = ComputerAsset.objects.select_related('category').get(asset_code=pk)
     except ComputerAsset.DoesNotExist:
         return Response(
-            {'error': 'Computer asset not found'},
+            {'error': f'Computer asset with code "{pk}" not found.'},
             status=status.HTTP_404_NOT_FOUND
         )
 
-    # ------------------------------------------------------------------
-    # GET: Retrieve single record
-    # ------------------------------------------------------------------
+    # 1. Get Details
     if request.method == 'GET':
         if not request.user.has_perm('hardware_specs.view_baseasset'):
-            return Response(
-                {"error": "You do not have permission to view this computer's details."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
+            return Response({"error": "Unauthorized to view this asset."}, status=status.HTTP_403_FORBIDDEN)
         serializer = ComputerSerializer(computer)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # ------------------------------------------------------------------
-    # PUT: Update single record
-    # ------------------------------------------------------------------
-    elif request.method == 'PUT':
+    # 2. Update Details (PUT / PATCH)
+    elif request.method in ['PUT', 'PATCH']:
         if not request.user.has_perm('hardware_specs.change_baseasset'):
-            return Response(
-                {"error": "You do not have permission to update this computer."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({"error": "Unauthorized to update this asset."}, status=status.HTTP_403_FORBIDDEN)
 
-        serializer = ComputerSerializer(computer, data=request.data)
+        # Allow partial updates so peripheral assignment doesn't wipe existing RAM/CPU specs
+        partial = request.method == 'PATCH' or request.data.get('partial', True)
+        serializer = ComputerSerializer(computer, data=request.data, partial=partial)
+
         if serializer.is_valid():
-            serializer.save()
+            category_id = request.data.get("category_id") or request.data.get("category")
+            if category_id:
+                try:
+                    serializer.save(category_id=int(category_id))
+                except (TypeError, ValueError):
+                    return Response({"category_id": ["Category ID must be a valid integer."]}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                serializer.save()
+
             return Response(serializer.data, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    # ------------------------------------------------------------------
-    # DELETE: Remove record
-    # ------------------------------------------------------------------
+    # 3. Delete Asset
     elif request.method == 'DELETE':
         if not request.user.has_perm('hardware_specs.delete_baseasset'):
-            return Response(
-                {"error": "You do not have permission to delete this computer."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
+            return Response({"error": "Unauthorized to delete this asset."}, status=status.HTTP_403_FORBIDDEN)
         computer.delete()
-        return Response(
-            {'message': 'Computer asset deleted successfully'},
-            status=status.HTTP_204_NO_CONTENT
-        )
+        return Response({'message': 'Computer asset deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
 
+    
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def computer_list_by_type(request, pc_type):
@@ -550,11 +532,9 @@ def computer_list_by_type(request, pc_type):
             status=status.HTTP_400_BAD_REQUEST
         )
         
-    computers = ComputerAsset.objects.filter(pc_type__iexact=clean_type).order_by('-baseasset_ptr_id')
+    computers = ComputerAsset.objects.filter(pc_type__iexact=clean_type).order_by('-asset_code')
     serializer = ComputerSerializer(computers, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
-
-
 # =====================================================================
 # 4. عمليات الأجهزة اللوحية (Tablets CRUD)
 # =====================================================================
@@ -939,6 +919,68 @@ def monitor_detail_update_delete(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_in_stock_assets_by_category(request):
+    if not request.user.has_perm('hardware_specs.view_baseasset'):
+        return Response(
+            {"error": "You do not have permission to view stock assets filtered by category."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    category_name = request.query_params.get('category', None)
+    
+    if not category_name:
+        return Response(
+            {"error": "Please provide a 'category' parameter in the URL (e.g., ?category=pc)"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        assets = BaseAsset.objects.select_related(
+            'category', 
+            'computerasset'
+        ).filter(
+            status='in_stock'
+        ).filter(
+            Q(category__name_en__icontains=category_name) | 
+            Q(category__name_ar__icontains=category_name)
+        ).order_by('-created_at')
+
+        data = []
+        for asset in assets:
+            cat = asset.category
+            
+            asset_data = {
+                "asset_code": asset.asset_code,
+                "serial_number": getattr(asset, 'serial_number', None),
+                "brand": getattr(asset, 'brand', None),
+                "model_or_pn": getattr(asset, 'model_or_pn', None),
+                "status": asset.status,
+                "category": {
+                    "id": cat.id if cat else None,
+                    "name_en": cat.name_en if cat else None,
+                    "name_ar": cat.name_ar if cat else None,
+                }
+            }
+
+            if cat and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
+                comp_specs = getattr(asset, 'computerasset', None)
+                if comp_specs:
+                    asset_data["specs"] = {
+                        "processor": getattr(comp_specs, 'processor', None),
+                        "ram": getattr(comp_specs, 'memory_ram', None),
+                        "storage": getattr(comp_specs, 'hard_disk', None),
+                    }
+                else:
+                    asset_data["specs"] = "No hardware specs recorded for this computer"
+
+            data.append(asset_data)
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
     # 🔒 Authorization Check
     if not request.user.has_perm('hardware_specs.view_baseasset'):
         return Response(

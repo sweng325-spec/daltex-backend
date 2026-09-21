@@ -35,17 +35,21 @@ def inventory_list_create(request):
         acc_serializer = InventoryAccessoriesStockSerializer(accessories, many=True)
         
         # 2. Fetch all unique hardware base assets that are currently 'in_stock'
-        in_stock_hardware = BaseAsset.objects.filter(status='in_stock').order_by('id')
+        # 🌟 Optimized: Replaced .order_by('id') with .order_by('asset_code') & added select_related
+        in_stock_hardware = BaseAsset.objects.select_related('category').filter(
+            status='in_stock'
+        ).order_by('asset_code')
         
-        # Map fields manually to keep the footprint light and clean
+        # Map fields manually using asset_code / pk instead of id
         hardware_data = [
             {
-                "id": asset.id,
+                "id": asset.asset_code,  # 🌟 Updated to asset_code
+                "asset_code": asset.asset_code,
                 "serial_number": asset.serial_number,
                 "brand": asset.brand,
                 "model_or_pn": asset.model_or_pn,
                 "status": asset.status,
-                "category_name": getattr(asset.category, 'name_en', None) if asset.category else None
+                "category_name": asset.category.name_en if asset.category else None
             }
             for asset in in_stock_hardware
         ]
@@ -69,7 +73,6 @@ def inventory_list_create(request):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
@@ -173,9 +176,17 @@ def create_accessory_item(request):  # save to history log
 def adjust_accessory_stock(request, pk):
     """
     Endpoint to explicitly increase or decrease an accessory's stock quantity.
-    Expected Payload: {"action": "increase"/"decrease", "quantity": 5, "notes": "Reason"}
+    Expected Payload: {
+        "action": "increase"/"decrease", 
+        "quantity": 5, 
+        "notes": "Reason",
+        "consumer": "John Doe",
+        "branch": "HQ",
+        "sector": "IT",
+        "department": "Tech Support"
+    }
     """
-    # 🔒 Authorization Check: تعديل الكميات يتطلب صلاحية التعديل على موديل المخزن
+    # 🔒 Authorization Check
     if not request.user.has_perm('inventory.change_inventoryitem'):
         return Response(
             {"error": "You do not have permission to adjust stock quantities."}, 
@@ -191,6 +202,12 @@ def adjust_accessory_stock(request, pk):
     qty = int(request.data.get('quantity', 0))
     notes = request.data.get('notes', '')
 
+    # Extract target recipient & organizational structure details from request body
+    consumer = request.data.get('consumer')
+    branch = request.data.get('branch')
+    sector = request.data.get('sector')
+    department = request.data.get('department')
+
     if action not in ['increase', 'decrease'] or qty <= 0:
         return Response({"error": "Invalid action or quantity value."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -205,15 +222,19 @@ def adjust_accessory_stock(request, pk):
 
     item.save()
 
-    # Create Log entry for the adjustment
+    # Create Log entry for the adjustment including consumer and organizational fields
     log = InventoryTransactionLog.objects.create(
-        user=request.user if request.user.is_authenticated else None, # Safe fallback
+        user=request.user if request.user.is_authenticated else None,
         action_type=action,
         item_type='accessory',
         inventory_item=item,
         quantity_changed=delta,
         new_total_quantity=item.quantity_in_stock,
-        notes=notes
+        notes=notes,
+        consumer=consumer,
+        branch=branch,
+        sector=sector,
+        department=department
     )
 
     return Response({
@@ -222,20 +243,31 @@ def adjust_accessory_stock(request, pk):
         "log_id": log.id
     }, status=status.HTTP_200_OK)
 
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def inventory_history_list(request):
     """
-    API view to get the complete audit log history of inventory movements.
+    API view to get the complete audit log history of inventory movements with categories.
     """
-    # 🔒 Authorization Check: فحص صلاحية قراءة سجلات العمليات
     if not request.user.has_perm('inventory.view_inventorytransactionlog'):
         return Response(
             {"error": "You do not have permission to view inventory transaction history."}, 
             status=status.HTTP_403_FORBIDDEN
         )
 
-    logs = InventoryTransactionLog.objects.select_related('user', 'inventory_item', 'hardware_asset').all().order_by('-created_at')
+    # Optimizing query execution with foreign key category lookups
+    logs = (
+        InventoryTransactionLog.objects
+        .select_related(
+            'user', 
+            'inventory_item', 
+            'inventory_item__category', 
+            'hardware_asset', 
+            'hardware_asset__category'
+        )
+        .all()
+        .order_by('-created_at')
+    )
+    
     serializer = InventoryTransactionLogSerializer(logs, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)

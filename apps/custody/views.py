@@ -2,12 +2,14 @@ from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
 from django.core.exceptions import ObjectDoesNotExist
-
+from django.db.models.functions import Cast
+from django.db.models import IntegerField
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
+from apps.inventory.models import InventoryTransactionLog
 from apps.organization.models import BranchStructure
 from apps.hardware_specs.models import BaseAsset
 from .models import ConsumerCustody
@@ -70,64 +72,99 @@ def add_new_employee(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+from rest_framework.pagination import PageNumberPagination
+    
+class EmployeePagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def unique_employee_list(request):
     """
-    API view to fetch all employees from the independent master table 
-    with their consolidated branch, department, and status details.
+    Paginated, searchable, and filterable endpoint for employee management.
     """
-    
-    
-    # This prints every permission assigned to Jana's account/groups
-    user_perms = list(request.user.get_all_permissions())
-   
-    
-    # Check if 'custody.view_employee' is actually the right label
-    has_custody_perm = request.user.has_perm('custody.view_employee')
-    
-    # 🔒 Authorization Check
-    if not has_custody_perm:
-        return Response(
-            {
-                "error": "You do not have permission to view the employee list.",
-                "debug_info": {
-                    "logged_in_as": request.user.username,
-                    "your_assigned_permissions": user_perms,
-                    "hint": "Check the terminal console where Django is running to see the detailed trace!"
-                }
-            }, 
-            status=status.HTTP_403_FORBIDDEN
-        )
+    if not request.user.has_perm('custody.view_employee'):
+        return Response({"error": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
 
     try:
-        
-        employees = Employee.objects.select_related(
-            'branch_structure__branch', 
+        # 1. Base Queryset
+        queryset = Employee.objects.select_related(
+            'branch_structure__branch',
+            'branch_structure__sector',
             'branch_structure__department'
-        ).all().order_by('name_en')
-        
-        employee_list = []
-        for emp in employees:
-            struct = emp.branch_structure
-            
-            employee_list.append({
-                "employee_code": emp.employee_code,
-                "employee_name_ar": emp.name_ar,
-                "employee_name_en": emp.name_en,
-                "status": emp.status,
-                "last_known_branch": struct.branch.name_en if struct and struct.branch else None,
-                "last_known_sector": struct.sector.sector_name if struct and struct.sector else None,
-                "last_known_department": struct.department.name if struct and struct.department else None,
-            })
+        ).all()
 
-        return Response(employee_list, status=status.HTTP_200_OK)
+        # 2. Inactive Employee Filter (Default: Active only unless checkbox checked)
+        include_inactive = request.query_params.get('include_inactive', 'false').lower() == 'true'
+        # if not include_inactive:
+        #     queryset = queryset.filter(status='active')
+
+        # 3. Dropdown Filtering
+        branch_id = request.query_params.get('branch_id') or request.query_params.get('branch')
+        sector_id = request.query_params.get('sector_id') or request.query_params.get('sector')
+        dept_id = request.query_params.get('department_id') or request.query_params.get('department')
+        status_filter = request.query_params.get('status')    
+
+        if branch_id and branch_id.strip():
+            queryset = queryset.filter(branch_structure__branch_id=branch_id.strip())
+        if sector_id and sector_id.strip():
+            queryset = queryset.filter(branch_structure__sector_id=sector_id.strip())
+        if dept_id and dept_id.strip():
+            queryset = queryset.filter(branch_structure__department_id=dept_id.strip())
+
+        if status_filter and status_filter.strip():
+            status_list = [s.strip() for s in status_filter.split(',')]
+            queryset = queryset.filter(status__in=status_list)
+
+
+
+        # 4. Search Filter (Code, Name, Email)
+        search_query = request.query_params.get('search')
+        if search_query and search_query.strip():
+            term = search_query.strip()
+            queryset = queryset.filter(
+                Q(employee_code__icontains=term) |
+                Q(name_ar__icontains=term) |
+                Q(name_en__icontains=term) |
+                Q(email__icontains=term)
+            )
+
+        queryset = queryset.order_by('employee_code')
+
+        # 5. Export All Resolution (Unpaginated)
+        export_all = request.query_params.get('all', 'false').lower() == 'true'
+        if export_all:
+            data = [build_employee_dict(emp) for emp in queryset]
+            return Response(data, status=status.HTTP_200_OK)
+
+        # 6. Paginated Response
+        paginator = EmployeePagination()
+        page = paginator.paginate_queryset(queryset, request)
         
+        data = [build_employee_dict(emp) for emp in page]
+        return paginator.get_paginated_response(data)
+
     except Exception as e:
-        return Response(
-            {"error": str(e)}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def build_employee_dict(emp):
+    struct = emp.branch_structure
+    return {
+        "employee_code": emp.employee_code,
+        "employee_name_ar": emp.name_ar,
+        "employee_name_en": emp.name_en,
+        "email": emp.email,
+        "status": emp.status,
+        "last_known_branch": getattr(struct.branch, 'name_en', getattr(struct.branch, 'name', None)) if struct and struct.branch else None,
+        "last_known_branch_id": struct.branch_id if struct else None,
+        "last_known_sector": getattr(struct.sector, 'sector_name', getattr(struct.sector, 'name', None)) if struct and struct.sector else None,
+        "last_known_sector_id": struct.sector_id if struct else None,
+        "last_known_department": getattr(struct.department, 'name', None) if struct and struct.department else None,
+        "last_known_department_id": struct.department_id if struct else None,
+    }
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_employee_by_code(request, employee_code):
@@ -162,6 +199,14 @@ def get_employee_by_code(request, employee_code):
                 str(struct.branch)
             )
         
+        sector_name = None
+        if struct and struct.sector:
+            sector_name = (
+                getattr(struct.sector, 'sector_name', None) or 
+                getattr(struct.branch, 'name_en', None) or 
+                getattr(struct.branch, 'name', None) or 
+                str(struct.branch)
+            )
         # 🛡️ Safe Extraction for Department Name (عبر الـ branch_structure)
         department_name = None
         if struct and struct.department:
@@ -179,6 +224,7 @@ def get_employee_by_code(request, employee_code):
             "email": employee.email,
             "status": employee.status,  # 🌟 تم إضافة حقل الحالة في الملف الشخصي للموظف هنا
             "last_known_branch": branch_name,
+            "last_known_sector": sector_name,
             "last_known_department": department_name,
             "created_at": employee.created_at,
             "updated_at": employee.updated_at
@@ -248,11 +294,6 @@ def delete_employee(request, employee_code):
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def update_employee(request, employee_code):
-    """
-    API view to update an existing employee's fields.
-    Supports updating personal info, status, and migrating to a new BranchStructure.
-    """
-    # 🔒 Authorization Check
     if not request.user.has_perm('custody.change_employee'):
         return Response(
             {"error": "You do not have permission to update employee details."}, 
@@ -260,89 +301,81 @@ def update_employee(request, employee_code):
         )
 
     try:
-        # جلب الموظف مع علاقاته الحالية
         employee = Employee.objects.select_related('branch_structure').get(employee_code=employee_code)
         
-        # 1️⃣ تحديث البيانات النصية الشخصية والحالة (إذا تم إرسالها)
-        if 'name_ar' in request.data:
-            employee.name_ar = request.data['name_ar']
-        if 'name_en' in request.data:
-            employee.name_en = request.data['name_en']
+        # 1. Update Name fields
+        if 'name_ar' in request.data or 'nameAr' in request.data:
+            employee.name_ar = request.data.get('name_ar') or request.data.get('nameAr', '')
+            
+        if 'name_en' in request.data or 'nameEn' in request.data:
+            employee.name_en = request.data.get('name_en') or request.data.get('nameEn', '')
+
+        # 2. Update Email & Status
         if 'email' in request.data:
             employee.email = request.data['email']
             
-        
         if 'status' in request.data:
             employee.status = request.data['status']
             
-        structure_id = request.data.get('structure_id')
+        # 3. Branch / Sector / Department Structure Resolution
+        structure_id = request.data.get('structure_id') or request.data.get('structureId')
         
+        # Option A: Exact structure_id provided
         if structure_id:
             try:
-                structure_obj = BranchStructure.objects.get(id=structure_id)
-                employee.branch_structure = structure_obj
+                employee.branch_structure = BranchStructure.objects.get(id=structure_id)
             except BranchStructure.DoesNotExist:
-                return Response({"error": f"BranchStructure with ID '{structure_id}' does not exist."}, status=status.HTTP_404_NOT_FOUND)
-                
-        elif any(k in request.data for k in ['branch_id', 'sector_id', 'department_id']):
+                return Response({"error": f"Structure {structure_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Option B: Individual branch_id, sector_id, or department_id provided
+        elif any(k in request.data for k in ['branch_id', 'sector_id', 'department_id', 'branchId', 'sectorId', 'departmentId']):
             current_struct = employee.branch_structure
             
-            branch_id = request.data.get('branch_id') or (current_struct.branch_id if current_struct else None)
-            sector_id = request.data.get('sector_id') or (current_struct.sector_id if current_struct else None)
-            department_id = request.data.get('department_id') or (current_struct.department_id if current_struct else None)
-            
-            if not branch_id or not department_id:
-                return Response(
-                    {"error": "Both branch_id and department_id must be determinable to resolve the target structure."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # البحث عن التوليفة الهيكلية المطابقة
-            lookup_filters = {'branch_id': branch_id, 'department_id': department_id}
+            # Merge incoming data with current existing structure fallbacks
+            branch_id = request.data.get('branch_id') or request.data.get('branchId') or (current_struct.branch_id if current_struct else None)
+            sector_id = request.data.get('sector_id') or request.data.get('sectorId') or (current_struct.sector_id if current_struct else None)
+            department_id = request.data.get('department_id') or request.data.get('departmentId') or (current_struct.department_id if current_struct else None)
+
+            # Build query filter
+            lookup_filters = {}
+            if branch_id:
+                lookup_filters['branch_id'] = branch_id
+            if department_id:
+                lookup_filters['department_id'] = department_id
             if sector_id:
                 lookup_filters['sector_id'] = sector_id
-                
-            structure_obj = BranchStructure.objects.filter(**lookup_filters).first()
+
+            target_structure = BranchStructure.objects.filter(**lookup_filters).first()
             
-            if not structure_obj:
+            if not target_structure:
                 return Response(
-                    {"error": "The specified combination of Branch, Sector, and Department does not exist in BranchStructure registry."},
+                    {"error": "No matching Branch/Sector/Department structure combination found."}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
-                
-            employee.branch_structure = structure_obj
             
-        # حفظ التعديلات في قاعدة البيانات
+            employee.branch_structure = target_structure
+
         employee.save()
         
-        # تحضير الـ Response بالبيانات الجديدة
+        # Return populated details
         struct = employee.branch_structure
         return Response({
-            "message": f"Employee {employee_code} updated successfully.",
+            "message": "Employee updated successfully.",
             "employee": {
                 "employee_code": employee.employee_code,
                 "name_ar": employee.name_ar,
                 "name_en": employee.name_en,
                 "email": employee.email,
-                "status": employee.status,  # 👈 مضاف لعرض الحالة المحدثة في الـ response ببوستمان
+                "status": employee.status,
                 "structure_id": struct.id if struct else None,
                 "branch_id": struct.branch_id if struct else None,
                 "sector_id": struct.sector_id if struct else None,
                 "department_id": struct.department_id if struct else None,
             }
         }, status=status.HTTP_200_OK)
-        
-    except Employee.DoesNotExist:
-        return Response(
-            {"error": f"Employee with code {employee_code} not found."},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    except Exception as e:
-        return Response(
-            {"error": str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
 
+    except Employee.DoesNotExist:
+        return Response({"error": f"Employee {employee_code} not found."}, status=status.HTTP_404_NOT_FOUND)
 
 ############################################################################
 ## Asset Assignment API Views
@@ -387,6 +420,28 @@ def assign_asset_custody(request):
             asset.status = 'assigned'
             asset.save()
 
+            # Safely fetch branch/sector/department via employee.branch_structure
+            bs = employee.branch_structure
+            branch_name = getattr(bs.branch, 'name_en', getattr(bs.branch, 'name', None)) if bs and bs.branch else None
+            sector_name = getattr(bs.sector, 'sector_name', getattr(bs.sector, 'name', None)) if bs and bs.sector else None
+            dept_name = getattr(bs.department, 'name', None) if bs and bs.department else None
+
+            # Create Inventory Transaction Log
+            InventoryTransactionLog.objects.create(
+                user=request.user if request.user.is_authenticated else None,
+                action_type='Decreased',
+                item_type='asset',
+                hardware_asset=asset,
+                inventory_item=None,
+                quantity_changed=-1,
+                new_total_quantity=0,
+                notes=notes or f"Asset {serial_number} issued to employee {employee.name_en or employee.name_ar or employee_code}",
+                consumer=employee.name_en or employee.name_ar or str(employee_code),
+                branch=str(branch_name) if branch_name else None,
+                sector=str(sector_name) if sector_name else None,
+                department=str(dept_name) if dept_name else None
+            )
+
         return Response({"message": f"Asset {serial_number} successfully assigned to employee {employee_code}."}, status=status.HTTP_201_CREATED)
 
     except BaseAsset.DoesNotExist:
@@ -414,7 +469,6 @@ def assign_asset_to_structure(request):
     structure_id = request.data.get('structure_id')
     notes = request.data.get('notes', '')
 
-    # 1️⃣ التحقق من إرسال البيانات المطلوبة كاملة
     if not serial_number or not structure_id:
         return Response(
             {"error": "Both 'serial_number' and 'structure_id' are required fields."}, 
@@ -423,7 +477,6 @@ def assign_asset_to_structure(request):
 
     try:
         with transaction.atomic():
-            # 2️⃣ جلب الأصل والتحقق من أنه متوفر بالمخزن
             asset = BaseAsset.objects.get(serial_number=serial_number)
             
             if asset.status != 'in_stock':
@@ -432,19 +485,17 @@ def assign_asset_to_structure(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 3️⃣ جلب الهيكل التنظيمي الموحد (المقر المستهدف)
             try:
-                branch_structure = BranchStructure.objects.get(id=structure_id)
+                branch_structure = BranchStructure.objects.get(pk=structure_id)
             except BranchStructure.DoesNotExist:
                 return Response(
                     {"error": f"Organizational Structure with ID {structure_id} does not exist."}, 
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # 4️⃣ إنشاء سجل العهدة (مع ترك حقل الموظف فارغاً null لأنه صرف للمكان)
             ConsumerCustody.objects.create(
                 asset=asset,
-                employee=None,  # 🌟 عهدة مكانية عامة للمقر وليست لشخص
+                employee=None,
                 branch_structure=branch_structure,
                 action_type='issue',
                 assignment_date=timezone.now().date(),
@@ -452,9 +503,29 @@ def assign_asset_to_structure(request):
                 notes=notes
             )
 
-            # 5️⃣ تحويل حالة الأصل إلى مصروف (assigned)
             asset.status = 'assigned'
             asset.save()
+
+            # Extract location details from the branch_structure relations
+            branch_name = getattr(branch_structure.branch, 'name_en', getattr(branch_structure.branch, 'name', None)) if branch_structure.branch else None
+            sector_name = getattr(branch_structure.sector, 'sector_name', getattr(branch_structure.sector, 'name', None)) if branch_structure.sector else None
+            dept_name = getattr(branch_structure.department, 'name', None) if branch_structure.department else None
+
+            # Create Inventory Transaction Log
+            InventoryTransactionLog.objects.create(
+                user=request.user if request.user.is_authenticated else None,
+                action_type='Deacreased',
+                item_type='asset',
+                hardware_asset=asset,
+                inventory_item=None,
+                quantity_changed=-1,
+                new_total_quantity=0,
+                notes=notes or f"Asset {serial_number} assigned to structure layout {structure_id}",
+                consumer=None,
+                branch=str(branch_name) if branch_name else None,
+                sector=str(sector_name) if sector_name else None,
+                department=str(dept_name) if dept_name else None
+            )
 
         return Response(
             {"message": f"Asset {serial_number} has been successfully assigned to structure layout ID {structure_id}."}, 
@@ -693,13 +764,17 @@ def get_asset_history(request, serial_number):
         )
 
     try:
-        # 🌟 التعديل: تصفية الـ select_related لتشمل الـ branch_structure المباشر والـ computerasset للمواصفات
+        # Include direct 'branch_structure' relation alongside employee structure relations
         history = ConsumerCustody.objects.select_related(
             'asset', 
             'asset__category', 
-            'asset__computerasset',  # جلب مواصفات الكمبيوتر لو وجدت في خطوة واحدة
-            'employee__branch_structure', 
-            'branch_structure',      # جلب الهيكل المباشر للعهدة المكانية
+            'asset__computerasset', 
+            'employee',
+            'employee__branch_structure',
+            'branch_structure',
+            'branch_structure__branch',
+            'branch_structure__sector',
+            'branch_structure__department',
             'assigned_by'
         ).filter(asset__serial_number=serial_number).order_by('-created_at')
 
@@ -709,26 +784,25 @@ def get_asset_history(request, serial_number):
             asset = log.asset
             cat = asset.category if asset else None
             
-            # 💡 جلب الهيكل التنظيمي الفعال (سواء من الموظف أو من العهدة المكانية مباشرة)
-            struct = log.branch_structure if log.branch_structure else (emp.branch_structure if emp else None)
+            # 💡 Fallback to direct log.branch_structure if log.employee is None
+            struct = log.branch_structure or (emp.branch_structure if emp else None)
             
-            # 🛡️ Safe extraction لبيانات الهيكل الإداري بدون الحقول الملغاة
+            # 🛡️ Safe extraction for location details
             branch_name = None
             if struct and getattr(struct, 'branch', None):
                 branch_name = getattr(struct.branch, 'name_en', None) or getattr(struct.branch, 'branch_name', None) or str(struct.branch)
                 
             sector_name = None
             if struct and getattr(struct, 'sector', None):
-                sector_name = getattr(struct.sector, 'sector_name', None) or getattr(struct.sector, 'sector_name', None) or str(struct.sector)
-                    
+                sector_name = getattr(struct.sector, 'sector_name', None) or getattr(struct.sector, 'name', None) or str(struct.sector)
                 
             department_name = None
             if struct and getattr(struct, 'department', None):
-                department_name = getattr(struct.department, 'name', None) or getattr(struct.department, 'name', None) or str(struct.department)
+                department_name = getattr(struct.department, 'name', None) or str(struct.department)
 
-            # 📦 بناء بيانات الأصل الأساسية المتاحة
+            # 📦 Base asset metadata
             asset_data = {
-                "id": asset.id if asset else None,
+                "asset_code": getattr(asset, 'asset_code', None) if asset else None,
                 "category_name_en": cat.name_en if cat else None,
                 "category_name_ar": cat.name_ar if cat else None,
                 "brand": asset.brand if asset else None,
@@ -736,7 +810,7 @@ def get_asset_history(request, serial_number):
                 "serial_number": asset.serial_number if asset else None,
             }
 
-            # 💻 إلحاق الـ Specs لو كان هذا السجل يخص جهاز كمبيوتر في تاريخه
+            # 💻 Attach specs if category is computer/laptop
             if cat and cat.name_en.lower() in ['computer', 'pc', 'laptop']:
                 comp_specs = getattr(asset, 'computerasset', None)
                 if comp_specs:
@@ -747,7 +821,7 @@ def get_asset_history(request, serial_number):
                         "os": getattr(comp_specs, 'os', None),
                     }
 
-            # تجميع الـ Log Item
+            # Assemble log entry
             report.append({
                 "custody_id": log.id,
                 "action_type": log.action_type,
@@ -755,12 +829,11 @@ def get_asset_history(request, serial_number):
                 "action_date": log.assignment_date,
                 "return_date": log.return_date,
                 
-                # الكيان المستهلك: قد يكون موظفاً أو مقراً إدارياً
                 "assignment_target": {
                     "type": "employee" if emp else "structure",
                     "structure_id": struct.id if struct else None,
                     "branch_name": branch_name,
-                    "sector_name":sector_name,
+                    "sector_name": sector_name,
                     "department_name": department_name,
                     "employee_details": {
                         "employee_code": emp.employee_code,
@@ -781,8 +854,6 @@ def get_asset_history(request, serial_number):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_global_custody_history(request):
@@ -881,7 +952,7 @@ def get_global_custody_history(request):
                     "type": assignment_type,
                     "structure_id": struct.id if struct else None,
                     "branch_name": branch_name,
-                    "sector_name":sector_name,
+                    "sector_name": sector_name,
                     "department_name": department_name,
                     "employee_details": {
                         "employee_code": emp.employee_code,
@@ -891,7 +962,8 @@ def get_global_custody_history(request):
                 },
                 
                 "asset_details": {
-                    "id": asset.id if asset else None,
+                    "id": asset.asset_code if asset else None,
+                    "asset_code": asset.asset_code if asset else None,
                     "category_name_en": cat.name_en if cat else None,
                     "category_name_ar": cat.name_ar if cat else None,
                 },
@@ -907,8 +979,6 @@ def get_global_custody_history(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_all_active_assignments(request):
@@ -925,14 +995,14 @@ def get_all_active_assignments(request):
         )
 
     try:
-        # 🌟 عمل JOIN يغطي الـ branch_structure المباشر والـ branch_structure التابع للموظف معاً
+        # 🌟 Cleaned select_related (removed non-existent 'branch_structure')
         active_assignments = ConsumerCustody.objects.filter(
             action_type='issue',
             return_date__isnull=True
         ).select_related(
             'asset',
             'employee__branch_structure',
-            'branch_structure'
+            'assigned_by'
         ).order_by('-assignment_date')
 
         data = []
@@ -940,10 +1010,10 @@ def get_all_active_assignments(request):
             emp = custody.employee
             asset = custody.asset
             
-            # 💡 جلب الهيكل التنظيمي الفعال
-            struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
+            # 💡 Derive branch structure safely via employee
+            struct = getattr(emp, 'branch_structure', None) if emp else None
             
-            # 🛡️ استخراج اسم الفرع بأمان
+            # 🛡️ Safe extraction for location details
             branch_name = None
             if struct and getattr(struct, 'branch', None):
                 branch_name = (
@@ -962,7 +1032,6 @@ def get_all_active_assignments(request):
                     str(struct.sector)
                 )    
             
-            # 🛡️ استخراج اسم القسم بأمان
             department_name = None
             if struct and getattr(struct, 'department', None):
                 department_name = (
@@ -984,15 +1053,17 @@ def get_all_active_assignments(request):
                     except Exception:
                         pass
                 
-                # 2. Fallback direct db lookup using the base asset link
+                # 2. Fallback direct DB lookup using primary key link (asset_code)
                 if not comp_subclass:
                     try:
                         from apps.hardware_specs.models import ComputerAsset
-                        comp_subclass = ComputerAsset.objects.filter(baseasset_ptr_id=asset.id).first()
+                        comp_subclass = ComputerAsset.objects.filter(
+                            baseasset_ptr_id=asset.asset_code
+                        ).first()
                     except Exception:
                         pass
 
-                # Populate data fields matching the columns in public.asset_computers
+                # Populate data fields
                 if comp_subclass:
                     asset_specs = {
                         "pc_type": getattr(comp_subclass, 'pc_type', None),
@@ -1022,12 +1093,13 @@ def get_all_active_assignments(request):
                 },
                 
                 "asset": {
-                    "id": asset.id if asset else None,
+                    "id": asset.asset_code if asset else None,  # Updated to asset_code
+                    "asset_code": asset.asset_code if asset else None,
                     "serial_number": asset.serial_number if asset else None,
                     "brand": asset.brand if asset else None,
                     "model_or_pn": asset.model_or_pn if asset else None,
                     "status": asset.status if asset else None,
-                    "specs": asset_specs  # Now fully populated
+                    "specs": asset_specs
                 }
             })
 
@@ -1038,8 +1110,6 @@ def get_all_active_assignments(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_assigned_assets_count(request):
@@ -1138,7 +1208,7 @@ def get_filtered_and_searched_assets_in_custody(request):
             'employee__branch_structure__department'
         )
 
-        # 2. Category Filter (Optional: filter by category if 'name' is provided)
+        # 2. Category Filter
         if category_name and category_name.strip():
             cat_val = category_name.strip()
             active_assignments = active_assignments.filter(
@@ -1219,7 +1289,7 @@ def get_filtered_and_searched_assets_in_custody(request):
                     Q(employee__branch_structure__department__name_en__icontains=d_val)
                 )
 
-        # 4. Global Search Filter (Updated with Asset ID support)
+        # 4. Global Search Filter (Updated to use asset_code instead of id)
         if search_query and search_query.strip():
             term = search_query.strip()
             
@@ -1236,15 +1306,16 @@ def get_filtered_and_searched_assets_in_custody(request):
                 Q(employee__branch_structure__branch__name_ar__icontains=term) |
                 Q(asset__computerasset__processor__icontains=term) |
                 Q(asset__computerasset__memory_ram__icontains=term) |
+                Q(asset__computerasset__hard_disk__icontains=term) |
                 Q(asset__computerasset__pc_type__icontains=term) |
                 Q(asset__printerasset__ip_address_eth__icontains=term)
             )
 
-            # Include asset ID in search
+            # Updated asset ID lookup to asset_code
             if term.isdigit():
-                search_conditions |= Q(asset__id=int(term))
+                search_conditions |= Q(asset__asset_code=int(term))
             else:
-                search_conditions |= Q(asset__id__icontains=term)
+                search_conditions |= Q(asset__asset_code__icontains=term)
 
             active_assignments = active_assignments.filter(search_conditions)
 
@@ -1274,7 +1345,7 @@ def get_filtered_and_searched_assets_in_custody(request):
             asset = custody.asset
             cat = asset.category if asset else None
 
-            # Resolve Branch Structure (Explicit Custody Structure vs Employee Structure)
+            # Resolve Branch Structure
             struct = custody.branch_structure if custody.branch_structure else (emp.branch_structure if emp else None)
 
             # Structure Name Extraction
@@ -1296,7 +1367,6 @@ def get_filtered_and_searched_assets_in_custody(request):
             # Specification Dictionary Population
             specs_dict = {}
             if asset:
-                # Computers / Laptops / PCs
                 comp = getattr(asset, 'computerasset', None) or getattr(asset, 'computer', None)
                 if comp:
                     specs_dict = {
@@ -1318,7 +1388,6 @@ def get_filtered_and_searched_assets_in_custody(request):
                         "mouse_model": getattr(comp, 'mouse_model', None),
                         "mouse_serial": getattr(comp, 'mouse_serial', None),
                     }
-                # Monitors
                 elif getattr(asset, 'monitorasset', None) or getattr(asset, 'monitor', None):
                     mon = getattr(asset, 'monitorasset', None) or getattr(asset, 'monitor', None)
                     specs_dict = {
@@ -1330,7 +1399,6 @@ def get_filtered_and_searched_assets_in_custody(request):
                         "location_details": getattr(mon, 'location_details', None),
                         "part_number": getattr(mon, 'part_number', None),
                     }
-                # Printers
                 elif getattr(asset, 'printerasset', None) or getattr(asset, 'printer', None):
                     ptr = getattr(asset, 'printerasset', None) or getattr(asset, 'printer', None)
                     specs_dict = {
@@ -1348,7 +1416,6 @@ def get_filtered_and_searched_assets_in_custody(request):
                         "printer_color": getattr(ptr, 'printer_color', None),
                         "technology": getattr(ptr, 'technology', None),
                     }
-                # Tablets
                 elif getattr(asset, 'tabletasset', None) or getattr(asset, 'tablet', None):
                     tab = getattr(asset, 'tabletasset', None) or getattr(asset, 'tablet', None)
                     specs_dict = {
@@ -1358,8 +1425,10 @@ def get_filtered_and_searched_assets_in_custody(request):
                         "screen_color_specs": getattr(tab, 'screen_color_specs', None),
                     }
 
+            # Updated asset dictionary to return asset_code
             asset_data = {
-                "id": asset.id if asset else None,
+                "id": asset.asset_code if asset else None,
+                "asset_code": asset.asset_code if asset else None,
                 "serial_number": asset.serial_number if asset else None,
                 "brand": asset.brand if asset else None,
                 "model_or_pn": asset.model_or_pn if asset else None,
@@ -1376,7 +1445,7 @@ def get_filtered_and_searched_assets_in_custody(request):
                 "assignment_id": custody.id,
                 "assignment_date": custody.assignment_date,
                 "notes": custody.notes,
-                "asset_id": asset.id if asset else None,
+                "asset_id": asset.asset_code if asset else None,
                 "employee": {
                     "employee_code": getattr(emp, 'employee_code', None) if emp else None,
                     "name_en": getattr(emp, 'name_en', None) if emp else None,
@@ -1399,8 +1468,7 @@ def get_filtered_and_searched_assets_in_custody(request):
         return Response(
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )       
-        
+        )     
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -1608,35 +1676,40 @@ def get_assigned_assets_by_category(request):
 @permission_classes([IsAuthenticated])
 def get_custody_by_serial(request, serial_number):
     """
-    Looks up who or what branch layout currently holds custody of a device by its serial number.
-    Supports both live employee custody and direct structural branch framework assignments.
+    Looks up custody details using serial_number, asset_code, or primary key.
+    Supports both live employee custody and structural branch assignments.
     """
-    # 🔒 Authorization Check
     if not request.user.has_perm('custody.view_consumercustody'):
         return Response(
             {"error": "You do not have permission to view custody entries."}, 
             status=status.HTTP_403_FORBIDDEN
         )
 
+    # 1️⃣ Support lookup by serial_number OR asset_code OR Primary Key (pk)
     try:
-        # 1️⃣ التحقق من وجود الأصل أولاً مع عمل Join للفئة لمنع الاستعلامات المتكررة
-        asset = BaseAsset.objects.select_related('category').get(serial_number=serial_number)
+        asset = BaseAsset.objects.select_related('category').get(
+            Q(serial_number=serial_number) | 
+            Q(asset_code=serial_number) | 
+            Q(pk=serial_number if serial_number.isdigit() else None)
+        )
     except BaseAsset.DoesNotExist:
-        return Response({"error": f"Device with serial number '{serial_number}' not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": f"Device with identifier '{serial_number}' not found."}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
 
-    # 2️⃣ جلب العهدة النشطة الحالية فقط (التي لم تُسترد بعد)
+    # 2️⃣ Fetch active custody safely without invalid select_related fields
     active_custody = ConsumerCustody.objects.select_related(
-        'employee__branch_structure',
-        'branch_structure'
+        'employee',
+        'asset'
     ).filter(
         asset=asset,
         action_type='issue',
         return_date__isnull=True
     ).order_by('-created_at').first()
 
-    # 💡 بناء تفاصيل الجهاز الأساسية لإرجاعها في كلتا الحالتين
     device_details = {
-        "id": asset.id,
+        "asset_code": asset.asset_code,
         "serial_number": asset.serial_number,
         "brand": asset.brand,
         "model_or_pn": asset.model_or_pn,
@@ -1644,54 +1717,59 @@ def get_custody_by_serial(request, serial_number):
         "category_name": asset.category.name_en if asset.category else None
     }
 
-    # 3️⃣ إذا لم توجد عهدة نشطة، أو لم يرتبط بها موظف ولا هيكل تنظيمي، فالجهاز متاح بالمخزن
-    if not active_custody or (not active_custody.employee and not active_custody.branch_structure):
+    # 3️⃣ Return early if asset is in stock
+    if not active_custody or not active_custody.employee:
         return Response({
             "message": "Device exists and is currently available in stock.",
             "custody_status": "in_stock",
             "device_details": device_details
         }, status=status.HTTP_200_OK)
 
-    # 4️⃣ جلب الهيكل التنظيمي الفعال بأمان (من العهدة مباشرة أو من الموظف)
-    struct = active_custody.branch_structure if active_custody.branch_structure else (active_custody.employee.branch_structure if active_custody.employee else None)
-    
-    branch_name = None
-    if struct and getattr(struct, 'branch', None):
-        branch_name = getattr(struct.branch, 'name_en', None) or getattr(struct.branch, 'branch_name', None) or str(struct.branch)
-     
-    sector_name = None
-    if struct and getattr(struct, 'sector', None):
-        sector_name = getattr(struct.sector, 'sector_name', None) or getattr(struct.branch, 'sector_name', None) or str(struct.sector)
-     
-        
-    department_name = None
-    if struct and getattr(struct, 'department', None):
-        department_name = getattr(struct.department, 'name', None) or getattr(struct.department, 'name', None) or str(struct.department)
+    # 4️⃣ Safely derive location metadata from employee
+    emp = active_custody.employee
+    struct = getattr(emp, 'branch_structure', None) or getattr(emp, 'branch', None)
 
-    # 5️⃣ تشكيل الـ Response النهائي ليتناسب مع React بدون الاعتماد الكلي على السيريالايزر القديم المقيد بالموظف
+    branch_name = None
+    sector_name = None
+    department_name = None
+
+    if struct:
+        branch_obj = getattr(struct, 'branch', struct)
+        branch_name = getattr(branch_obj, 'name_en', None) or getattr(branch_obj, 'name', None) or str(branch_obj)
+
+        sector_obj = getattr(struct, 'sector', None)
+        if sector_obj:
+            sector_name = getattr(sector_obj, 'sector_name', None) or getattr(sector_obj, 'name', None) or str(sector_obj)
+
+        dept_obj = getattr(struct, 'department', None)
+        if dept_obj:
+            department_name = getattr(dept_obj, 'name', None) or str(dept_obj)
+
+    # 5️⃣ Build output response
     return Response({
         "message": "Device is currently deployed.",
         "custody_status": "assigned",
         "assignment_details": {
             "custody_id": active_custody.id,
             "assignment_date": active_custody.assignment_date,
-            "assignment_type": "employee" if active_custody.employee else "structure",
+            "assignment_type": "employee",
             "notes": active_custody.notes,
             "location": {
-                "structure_id": struct.id if struct else None,
+                "structure_id": getattr(struct, 'id', None),
                 "branch_name": branch_name,
                 "sector_name": sector_name,
                 "department_name": department_name,
             },
             "employee_details": {
-                "employee_code": active_custody.employee.employee_code,
-                "name_en": active_custody.employee.name_en,
-                "name_ar": active_custody.employee.name_ar,
-            } if active_custody.employee else None
+                "employee_code": emp.employee_code,
+                "name_en": emp.name_en,
+                "name_ar": emp.name_ar,
+            }
         },
         "device_details": device_details
     }, status=status.HTTP_200_OK)
-    
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_assigned_assets_by_category_all(request):
@@ -1997,3 +2075,286 @@ def get_assignments_by_employee_code(request, emp_code):
         
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+
+import pandas as pd
+from django.db import transaction
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from apps.organization.models import Branch, Sector, Department, BranchStructure
+from apps.custody.models import Employee, ConsumerCustody
+from apps.hardware_specs.models import ComputerAsset, BaseAsset, AssetCategory
+
+
+def get_next_asset_code():
+    """Fetches the last asset code numerically and increments it by 1."""
+    # Annotate the queryset to treat the string as an integer for correct sorting
+    last_asset = BaseAsset.objects.annotate(
+        asset_code_int=Cast('asset_code', output_field=IntegerField())
+    ).order_by('-asset_code_int').first()
+    
+    if last_asset and last_asset.asset_code and last_asset.asset_code.isdigit():
+        return str(int(last_asset.asset_code) + 1)
+    return "1"
+
+def clean_val(row, idx):
+    """Safely retrieves and cleans column values from a DataFrame row, removing float .0 suffixes."""
+    if idx < len(row) and pd.notna(row[idx]):
+        val = row[idx]
+        
+        if isinstance(val, float) and val.is_integer():
+            val = int(val)
+            
+        val_str = str(val).strip()
+        
+        if val_str.endswith('.0'):
+            val_str = val_str[:-2]
+            
+        return val_str if val_str.lower() != 'nan' and val_str != '' else None
+    return None
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def import_computers_from_excel(request):
+    file = request.FILES.get('file')
+    
+    # 1. Validate File Upload
+    if not file:
+        return Response({"error": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    if not (file.name.endswith('.xls') or file.name.endswith('.xlsx')):
+        return Response({"error": "Invalid file type. Please upload an Excel sheet (.xls, .xlsx)."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 2. Fetch or Create Required 'Computer' AssetCategory
+    computer_category = AssetCategory.objects.filter(name_en__iexact="Computer").first()
+    if not computer_category:
+        computer_category = AssetCategory.objects.filter(id=8).first()
+    if not computer_category:
+        computer_category, _ = AssetCategory.objects.get_or_create(
+            name_en="Computer",
+            defaults={"name_ar": "حواسب وآلات حاسبة", "category_type": "base_asset", "code": "PC"}
+        )
+
+    try:
+        # Read file with dtype=str to preserve exact codes and leading zeros
+        df = pd.read_excel(file, sheet_name=0, header=None, skiprows=4, dtype=str)
+        
+        success_logs = []
+        error_logs = []
+        processed_serials_in_file = set()
+
+        for index, row in df.iterrows():
+            row_number = index + 5  # Offsets skipped headers and zero-based index
+
+            try:
+                with transaction.atomic():
+                    # Extract Organization & Employee Data
+                    branch_name = clean_val(row, 0)
+                    sector_name = clean_val(row, 1)
+                    dept_name   = clean_val(row, 2)
+                    emp_code    = clean_val(row, 3)
+                    emp_name    = clean_val(row, 4)
+
+                    # 💡 FIX: Column 10 is index 9 (or 10 if 0-based), Column 12 is index 11 (or 12 if 0-based)
+                    laptop_flag  =  clean_val(row, 7)
+                    desktop_flag =  clean_val(row, 9)
+                    
+                    pc_type = None
+                    if laptop_flag:
+                        pc_type = "Laptop"
+                    elif desktop_flag:
+                        pc_type = "Desktop"
+                    else:
+                        # Fallback default to prevent database NOT NULL constraint failure
+                        pc_type = "Desktop"
+
+                    # Extract Core Hardware Specs
+                    brand       = clean_val(row, 11)
+                    model       = clean_val(row, 12)
+                    serial_num  = clean_val(row, 13)
+                    processor   = clean_val(row, 14)
+                    memory      = clean_val(row, 15)
+                    hard_disk   = clean_val(row, 16)
+
+                    # Extract Accessories
+                    mon_brand   = clean_val(row, 18)
+                    mon_model   = clean_val(row, 19)
+                    mon_inches  = clean_val(row, 20)
+                    mon_serial  = clean_val(row, 21)
+
+                    kb_brand    = clean_val(row, 24)
+                    kb_model    = clean_val(row, 25)
+                    kb_serial   = clean_val(row, 26)
+
+                    ms_brand    = clean_val(row, 28)
+                    ms_model    = clean_val(row, 29)
+                    ms_serial   = clean_val(row, 30)
+
+                    bag_brand   = clean_val(row, 32)
+                    bag_desc    = clean_val(row, 33)
+
+                    # 3. Validate Required Fields
+                    if not serial_num:
+                        error_logs.append(f"Row {row_number}: Skipped - Serial Number is missing.")
+                        continue
+                        
+                    if not emp_code:
+                        error_logs.append(f"Row {row_number}: Skipped - Employee Code is missing.")
+                        continue
+
+                    # 4. Duplicate Check within Same File
+                    if serial_num in processed_serials_in_file:
+                        error_logs.append(f"Row {row_number}: Skipped - Duplicate Serial Number '{serial_num}' found multiple times in this file.")
+                        continue
+                    
+                    processed_serials_in_file.add(serial_num)
+
+                    # 5. Database Duplicate Check
+                    existing_base_asset = BaseAsset.objects.filter(serial_number=serial_num).first()
+                    computer = None
+
+                    if existing_base_asset:
+                        if existing_base_asset.status == 'assigned':
+                            error_logs.append(f"Row {row_number}: Skipped - Asset '{serial_num}' is already assigned to an employee.")
+                            continue
+                        elif existing_base_asset.status in ['maintenance', 'scrapped']:
+                            status_display = existing_base_asset.get_status_display()
+                            error_logs.append(f"Row {row_number}: Skipped - Asset '{serial_num}' cannot be assigned (Status: {status_display}).")
+                            continue
+                        
+                        try:
+                            computer = existing_base_asset.computerasset
+                        except ComputerAsset.DoesNotExist:
+                            error_logs.append(f"Row {row_number}: Skipped - Serial '{serial_num}' exists under a non-computer category.")
+                            continue
+
+                    # 6. Validate Organization Structure
+                    branch = Branch.objects.filter(name_en=branch_name).first()
+                    if not branch:
+                        error_logs.append(f"Row {row_number}: Skipped - Branch '{branch_name}' does not exist.")
+                        continue
+                        
+                    sector = Sector.objects.filter(sector_name=sector_name).first()
+                    if not sector:
+                        error_logs.append(f"Row {row_number}: Skipped - Sector '{sector_name}' does not exist.")
+                        continue
+                        
+                    department = Department.objects.filter(name=dept_name).first()
+                    if not department:
+                        error_logs.append(f"Row {row_number}: Skipped - Department '{dept_name}' does not exist.")
+                        continue
+
+                    branch_struct, _ = BranchStructure.objects.get_or_create(
+                        branch=branch,
+                        sector=sector,
+                        department=department
+                    )
+
+                    # 7. Get or Create Employee
+                    employee, _ = Employee.objects.get_or_create(
+                        employee_code=emp_code,
+                        defaults={
+                            'name_ar': emp_name,
+                            'branch_structure': branch_struct
+                        }
+                    )
+
+                    # 8. Create or Update Computer Asset
+                    if computer:
+                        computer.brand = brand or computer.brand
+                        computer.model_or_pn = model or computer.model_or_pn
+                        computer.pc_type = pc_type or computer.pc_type
+                        computer.processor = processor or computer.processor
+                        computer.memory_ram = memory or computer.memory_ram
+                        computer.hard_disk = hard_disk or computer.hard_disk
+
+                        computer.monitor_brand = mon_brand
+                        computer.monitor_model = mon_model
+                        computer.monitor_inches = mon_inches
+                        computer.monitor_serial = mon_serial
+
+                        computer.keyboard_brand = kb_brand
+                        computer.keyboard_model = kb_model
+                        computer.keyboard_serial = kb_serial
+
+                        computer.mouse_brand = ms_brand
+                        computer.mouse_model = ms_model
+                        computer.mouse_serial = ms_serial
+
+                        computer.bag_brand = bag_brand
+                        computer.bag_model_or_description = bag_desc
+
+                        if not computer.created_at:
+                            computer.created_at = timezone.now()
+
+                        computer.save()
+                    else:
+                        new_asset_code = get_next_asset_code()
+                        computer = ComputerAsset.objects.create(
+                            asset_code=new_asset_code,
+                            category=computer_category,
+                            pc_type=pc_type,
+                            serial_number=serial_num,
+                            brand=brand,
+                            model_or_pn=model,
+                            processor=processor,
+                            memory_ram=memory,
+                            hard_disk=hard_disk,
+                            status='in_stock',
+                            created_at=timezone.now(),
+                            # Accessories
+                            monitor_brand=mon_brand,
+                            monitor_model=mon_model,
+                            monitor_inches=mon_inches,
+                            monitor_serial=mon_serial,
+                            keyboard_brand=kb_brand,
+                            keyboard_model=kb_model,
+                            keyboard_serial=kb_serial,
+                            mouse_brand=ms_brand,
+                            mouse_model=ms_model,
+                            mouse_serial=ms_serial,
+                            bag_brand=bag_brand,
+                            bag_model_or_description=bag_desc
+                        )
+
+                    # 9. Assign Custody
+                    ConsumerCustody.objects.create(
+                        asset=computer,
+                        employee=employee,
+                        branch_structure=None,
+                        action_type='issue',
+                        assignment_date=timezone.now().date(),
+                        assigned_by=request.user if request.user.is_authenticated else None,
+                        notes="Bulk imported and assigned via Excel"
+                    )
+
+                    computer.status = 'assigned'
+                    if not computer.created_at:
+                        computer.created_at = timezone.now()
+                    computer.save()
+
+                    success_logs.append(f"Row {row_number}: Successfully assigned Computer '{serial_num}' and accessories to Employee '{emp_code}'.")
+
+            except Exception as row_error:
+                error_logs.append(f"Row {row_number}: Skipped due to error - {str(row_error)}")
+                continue
+
+        return Response({
+            "message": "File processing completed.",
+            "success_count": len(success_logs),
+            "error_count": len(error_logs),
+            "success_logs": success_logs,
+            "error_logs": error_logs
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": f"Failed to process file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    

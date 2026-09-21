@@ -1,0 +1,3 @@
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+D:\AssetApp\back\daltex-backend\venv\Scripts\activate.ps1

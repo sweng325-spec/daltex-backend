@@ -39,4 +39,7 @@ urlpatterns = [
     views.get_filtered_and_searched_assets_in_custody, 
     name='get-filtered-searched-assets'
 ),
+
+   path('import-excel/', views.import_computers_from_excel, name='import-excel'),
+
 ]
