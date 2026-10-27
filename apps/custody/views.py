@@ -11,7 +11,7 @@ from rest_framework import status
 
 from apps.inventory.models import InventoryTransactionLog
 from apps.organization.models import BranchStructure
-from apps.hardware_specs.models import BaseAsset
+from apps.hardware_specs.models import BaseAsset,PrinterAsset
 from .models import ConsumerCustody
 from .serializers import CustodyAssignmentLookupSerializer
 from apps.custody.models import Employee
@@ -2120,10 +2120,19 @@ def clean_val(row, idx):
         return val_str if val_str.lower() != 'nan' and val_str != '' else None
     return None
 
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def import_computers_from_excel(request):
+    """
+    API view to process bulk importing and assignment of Computers from structured Excel sheet.
+    Handles positional extractions, organizational lookups safely, and skips blank trailing rows.
+    """
+    if not request.user.has_perm('custody.add_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to import and assign computer custody."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     file = request.FILES.get('file')
     
     # 1. Validate File Upload
@@ -2154,70 +2163,68 @@ def import_computers_from_excel(request):
         for index, row in df.iterrows():
             row_number = index + 5  # Offsets skipped headers and zero-based index
 
+            # ------------------------------------------------------------------
+            # STEP A: Extract raw row strings BEFORE touching database or transactions
+            # ------------------------------------------------------------------
+            branch_name = clean_val(row, 0)
+            sector_name = clean_val(row, 1)
+            dept_name   = clean_val(row, 2)
+            emp_code    = clean_val(row, 3)
+            emp_name    = clean_val(row, 4)
+
+            laptop_flag  = clean_val(row, 7)
+            desktop_flag = clean_val(row, 9)
+            pc_type = "Laptop" if laptop_flag else "Desktop"
+
+            brand       = clean_val(row, 11)
+            model       = clean_val(row, 12)
+            serial_num  = clean_val(row, 13)
+            processor   = clean_val(row, 14)
+            memory      = clean_val(row, 15)
+            hard_disk   = clean_val(row, 16)
+
+            mon_brand   = clean_val(row, 18)
+            mon_model   = clean_val(row, 19)
+            mon_inches  = clean_val(row, 20)
+            mon_serial  = clean_val(row, 21)
+
+            kb_brand    = clean_val(row, 24)
+            kb_model    = clean_val(row, 25)
+            kb_serial   = clean_val(row, 26)
+
+            ms_brand    = clean_val(row, 28)
+            ms_model    = clean_val(row, 29)
+            ms_serial   = clean_val(row, 30)
+
+            bag_brand   = clean_val(row, 32)
+            bag_desc    = clean_val(row, 33)
+
+            # ------------------------------------------------------------------
+            # STEP B: Skip empty trailing rows (like Row 84) BEFORE database calls
+            # ------------------------------------------------------------------
+            if not serial_num and not any([branch_name, sector_name, dept_name, emp_code, brand, model]):
+                continue
+
+            if not serial_num:
+                error_logs.append(f"Row {row_number}: Skipped - Serial Number is missing.")
+                continue
+                
+            if not emp_code:
+                error_logs.append(f"Row {row_number}: Skipped - Employee Code is missing.")
+                continue
+
+            if serial_num in processed_serials_in_file:
+                error_logs.append(f"Row {row_number}: Skipped - Duplicate Serial Number '{serial_num}' found multiple times in this file.")
+                continue
+            
+            processed_serials_in_file.add(serial_num)
+
+            # ------------------------------------------------------------------
+            # STEP C: Database Execution inside isolated atomic block
+            # ------------------------------------------------------------------
             try:
                 with transaction.atomic():
-                    # Extract Organization & Employee Data
-                    branch_name = clean_val(row, 0)
-                    sector_name = clean_val(row, 1)
-                    dept_name   = clean_val(row, 2)
-                    emp_code    = clean_val(row, 3)
-                    emp_name    = clean_val(row, 4)
-
-                    # 💡 FIX: Column 10 is index 9 (or 10 if 0-based), Column 12 is index 11 (or 12 if 0-based)
-                    laptop_flag  =  clean_val(row, 7)
-                    desktop_flag =  clean_val(row, 9)
-                    
-                    pc_type = None
-                    if laptop_flag:
-                        pc_type = "Laptop"
-                    elif desktop_flag:
-                        pc_type = "Desktop"
-                    else:
-                        # Fallback default to prevent database NOT NULL constraint failure
-                        pc_type = "Desktop"
-
-                    # Extract Core Hardware Specs
-                    brand       = clean_val(row, 11)
-                    model       = clean_val(row, 12)
-                    serial_num  = clean_val(row, 13)
-                    processor   = clean_val(row, 14)
-                    memory      = clean_val(row, 15)
-                    hard_disk   = clean_val(row, 16)
-
-                    # Extract Accessories
-                    mon_brand   = clean_val(row, 18)
-                    mon_model   = clean_val(row, 19)
-                    mon_inches  = clean_val(row, 20)
-                    mon_serial  = clean_val(row, 21)
-
-                    kb_brand    = clean_val(row, 24)
-                    kb_model    = clean_val(row, 25)
-                    kb_serial   = clean_val(row, 26)
-
-                    ms_brand    = clean_val(row, 28)
-                    ms_model    = clean_val(row, 29)
-                    ms_serial   = clean_val(row, 30)
-
-                    bag_brand   = clean_val(row, 32)
-                    bag_desc    = clean_val(row, 33)
-
-                    # 3. Validate Required Fields
-                    if not serial_num:
-                        error_logs.append(f"Row {row_number}: Skipped - Serial Number is missing.")
-                        continue
-                        
-                    if not emp_code:
-                        error_logs.append(f"Row {row_number}: Skipped - Employee Code is missing.")
-                        continue
-
-                    # 4. Duplicate Check within Same File
-                    if serial_num in processed_serials_in_file:
-                        error_logs.append(f"Row {row_number}: Skipped - Duplicate Serial Number '{serial_num}' found multiple times in this file.")
-                        continue
-                    
-                    processed_serials_in_file.add(serial_num)
-
-                    # 5. Database Duplicate Check
+                    # 1. Database Duplicate Check
                     existing_base_asset = BaseAsset.objects.filter(serial_number=serial_num).first()
                     computer = None
 
@@ -2236,18 +2243,29 @@ def import_computers_from_excel(request):
                             error_logs.append(f"Row {row_number}: Skipped - Serial '{serial_num}' exists under a non-computer category.")
                             continue
 
-                    # 6. Validate Organization Structure
-                    branch = Branch.objects.filter(name_en=branch_name).first()
+                    # 2. Safe Organization Lookups
+                    branch = None
+                    if branch_name:
+                        branch = Branch.objects.filter(
+                            Q(name_en__iexact=branch_name) | Q(name_ar__iexact=branch_name)
+                        ).first()
+                    
                     if not branch:
                         error_logs.append(f"Row {row_number}: Skipped - Branch '{branch_name}' does not exist.")
                         continue
                         
-                    sector = Sector.objects.filter(sector_name=sector_name).first()
+                    sector = None
+                    if sector_name:
+                        sector = Sector.objects.filter(sector_name__iexact=sector_name).first()
+                    
                     if not sector:
                         error_logs.append(f"Row {row_number}: Skipped - Sector '{sector_name}' does not exist.")
                         continue
                         
-                    department = Department.objects.filter(name=dept_name).first()
+                    department = None
+                    if dept_name:
+                        department = Department.objects.filter(name__iexact=dept_name).first()
+                    
                     if not department:
                         error_logs.append(f"Row {row_number}: Skipped - Department '{dept_name}' does not exist.")
                         continue
@@ -2258,16 +2276,16 @@ def import_computers_from_excel(request):
                         department=department
                     )
 
-                    # 7. Get or Create Employee
+                    # 3. Safe Employee Lookup
                     employee, _ = Employee.objects.get_or_create(
-                        employee_code=emp_code,
+                        employee_code=emp_code.strip(),
                         defaults={
-                            'name_ar': emp_name,
+                            'name_ar': emp_name or emp_code.strip(),
                             'branch_structure': branch_struct
                         }
                     )
 
-                    # 8. Create or Update Computer Asset
+                    # 4. Create or Update Computer Asset
                     if computer:
                         computer.brand = brand or computer.brand
                         computer.model_or_pn = model or computer.model_or_pn
@@ -2303,14 +2321,13 @@ def import_computers_from_excel(request):
                             category=computer_category,
                             pc_type=pc_type,
                             serial_number=serial_num,
-                            brand=brand,
-                            model_or_pn=model,
+                            brand=brand or "Generic",
+                            model_or_pn=model or "",
                             processor=processor,
                             memory_ram=memory,
                             hard_disk=hard_disk,
                             status='in_stock',
                             created_at=timezone.now(),
-                            # Accessories
                             monitor_brand=mon_brand,
                             monitor_model=mon_model,
                             monitor_inches=mon_inches,
@@ -2325,7 +2342,7 @@ def import_computers_from_excel(request):
                             bag_model_or_description=bag_desc
                         )
 
-                    # 9. Assign Custody
+                    # 5. Assign Custody
                     ConsumerCustody.objects.create(
                         asset=computer,
                         employee=employee,
@@ -2357,4 +2374,193 @@ def import_computers_from_excel(request):
 
     except Exception as e:
         return Response({"error": f"Failed to process file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def import_printers_from_excel(request):
+    """
+    API view to process bulk importing and assignment of Printers from structured Excel sheet.
+    Enforces strict model validation: assigns custody to either Employee OR BranchStructure layout.
+    Skips row if specified Sector or Department does not exist in DB.
+    """
+    if not request.user.has_perm('custody.add_consumercustody'):
+        return Response(
+            {"error": "You do not have permission to import and assign printer custody."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    file = request.FILES.get('file')
+    if not file:
+        return Response({"error": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
     
+    if not (file.name.endswith('.xls') or file.name.endswith('.xlsx')):
+        return Response({"error": "Invalid file type. Please upload an Excel sheet (.xls, .xlsx)."}, status=status.HTTP_400_BAD_REQUEST)
+
+    printer_category = AssetCategory.objects.filter(name_en__iexact="Printer").first()
+    if not printer_category:
+        printer_category, _ = AssetCategory.objects.get_or_create(
+            name_en="Printer",
+            defaults={"name_ar": "طابعات", "category_type": "base_asset", "code": "PTR"}
+        )
+
+    try:
+        df = pd.read_excel(file, sheet_name=0, header=None, skiprows=4, dtype=str)
+        
+        success_logs = []
+        error_logs = []
+        processed_serials_in_file = set()
+
+        for index, row in df.iterrows():
+            row_number = index + 5
+
+            branch_name = clean_val(row, 0)
+            sector_name = clean_val(row, 1)
+            dept_name   = clean_val(row, 2)
+            emp_code    = clean_val(row, 3)
+            emp_name    = clean_val(row, 4)
+
+            brand       = clean_val(row, 9)
+            model       = clean_val(row, 10)
+            serial_num  = clean_val(row, 13) or clean_val(row, 12)
+
+            # Skip trailing blank rows
+            if not serial_num and not any([branch_name, sector_name, dept_name, emp_code, brand, model]):
+                continue
+
+            if not serial_num:
+                error_logs.append(f"Row {row_number}: Skipped - Serial Number is missing.")
+                continue
+
+            if serial_num in processed_serials_in_file:
+                error_logs.append(f"Row {row_number}: Skipped - Duplicate Serial Number '{serial_num}' found in file.")
+                continue
+            processed_serials_in_file.add(serial_num)
+
+            try:
+                with transaction.atomic():
+                    # 1. Database Asset Duplicate Check
+                    existing_base_asset = BaseAsset.objects.filter(serial_number=serial_num).first()
+                    printer = None
+
+                    if existing_base_asset:
+                        if existing_base_asset.status == 'assigned':
+                            error_logs.append(f"Row {row_number}: Skipped - Printer '{serial_num}' is already assigned.")
+                            continue
+                        elif existing_base_asset.status in ['maintenance', 'scrapped']:
+                            status_display = existing_base_asset.get_status_display()
+                            error_logs.append(f"Row {row_number}: Skipped - Printer '{serial_num}' cannot be assigned (Status: {status_display}).")
+                            continue
+                        
+                        try:
+                            printer = existing_base_asset.printerasset
+                        except PrinterAsset.DoesNotExist:
+                            error_logs.append(f"Row {row_number}: Skipped - Serial '{serial_num}' exists under a non-printer category.")
+                            continue
+
+                    # 2. Strict Organizational Lookups for Employee Location
+                    branch_struct = None
+                    if branch_name:
+                        clean_b = branch_name.strip()
+                        branch = Branch.objects.filter(
+                            Q(name_en__iexact=clean_b) | Q(name_ar__iexact=clean_b) | Q(name_en__icontains=clean_b)
+                        ).first()
+
+                        if not branch:
+                            error_logs.append(f"Row {row_number}: Skipped - Branch '{branch_name}' does not exist in database.")
+                            continue
+
+                        sector = None
+                        if sector_name:
+                            sector = Sector.objects.filter(sector_name__iexact=sector_name.strip()).first()
+                            if not sector:
+                                error_logs.append(f"Row {row_number}: Skipped - Sector '{sector_name}' does not exist in database.")
+                                continue
+
+                        department = None
+                        if dept_name:
+                            department = Department.objects.filter(name__iexact=dept_name.strip()).first()
+                            if not department:
+                                error_logs.append(f"Row {row_number}: Skipped - Department '{dept_name}' does not exist in database.")
+                                continue
+
+                        # Explicit lookup filtering prevents MultipleObjectsReturned
+                        branch_struct = BranchStructure.objects.filter(
+                            branch=branch,
+                            sector=sector,
+                            department=department
+                        ).first()
+
+                        if not branch_struct:
+                            branch_struct = BranchStructure.objects.create(
+                                branch=branch,
+                                sector=sector,
+                                department=department
+                            )
+
+                    # 3. Employee Resolution & Location Assignment
+                    employee = None
+                    if emp_code and emp_code.strip() != '*':
+                        employee, created = Employee.objects.get_or_create(
+                            employee_code=emp_code.strip(),
+                            defaults={
+                                'name_ar': emp_name or emp_code.strip(),
+                                'branch_structure': branch_struct
+                            }
+                        )
+                        if branch_struct and employee.branch_structure != branch_struct:
+                            employee.branch_structure = branch_struct
+                            if emp_name and not employee.name_ar:
+                                employee.name_ar = emp_name
+                            employee.save()
+
+                    # 4. Create or Update Printer Asset
+                    if printer:
+                        printer.brand = brand or printer.brand
+                        printer.model_or_pn = model or printer.model_or_pn
+                        printer.save()
+                    else:
+                        new_asset_code = get_next_asset_code()
+                        printer = PrinterAsset.objects.create(
+                            asset_code=new_asset_code,
+                            category=printer_category,
+                            serial_number=serial_num,
+                            brand=brand or "Generic",
+                            model_or_pn=model or "",
+                            status='in_stock',
+                            created_at=timezone.now()
+                        )
+
+                    # 5. Assign Custody (Employee OR Branch Structure, NEVER BOTH)
+                    ConsumerCustody.objects.create(
+                        asset=printer,
+                        employee=employee,
+                        branch_structure=branch_struct if not employee else None,  # 🌟 Key Fix
+                        action_type='issue',
+                        assignment_date=timezone.now().date(),
+                        assigned_by=request.user if request.user.is_authenticated else None,
+                        notes="Bulk imported and assigned via Excel"
+                    )
+
+                    printer.status = 'assigned'
+                    printer.save()
+
+                    target_str = f"Employee '{emp_code}'" if employee else f"Branch Layout '{branch_name}'"
+                    success_logs.append(f"Row {row_number}: Successfully assigned Printer '{serial_num}' to {target_str}.")
+
+            except Exception as row_error:
+                error_logs.append(f"Row {row_number}: Skipped due to error - {str(row_error)}")
+                continue
+
+        return Response({
+            "message": "File processing completed.",
+            "success_count": len(success_logs),
+            "error_count": len(error_logs),
+            "success_logs": success_logs,
+            "error_logs": error_logs
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": f"Failed to process file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

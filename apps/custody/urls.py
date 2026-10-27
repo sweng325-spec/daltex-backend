@@ -41,5 +41,6 @@ urlpatterns = [
 ),
 
    path('import-excel/', views.import_computers_from_excel, name='import-excel'),
+   path('import-printers-excel/', views.import_printers_from_excel, name='import-printers-excel'),
 
 ]
